@@ -48,14 +48,18 @@ Existing defenses rely on LLM-as-a-judge evaluators that add **1,500–3,000 ms*
   - **Positional Parameter & IFS Normalization**: Neutralizes `$IFS$9` word-splitting.
   - **Brace Expansion Resolution**: Expands `{etc,usr}` and single `{etc}` patterns.
   - **Dual-Representation SQL Analysis**: Defeats inline comment evasion (`DROP/**/TABLE` and `DR/**/OP`).
-  - **Interpreter Escape Interception**: Recursively parses code passed via `-c`/`-e` flags in `python`, `node`, `perl`, `ruby`, `php`, and `sh`.
+  - **Interpreter Escape Interception**: Recursively normalizes string concatenations (`'r'+'m'`), inspects dynamic imports (`import("node:fs")`), and parses code passed via `-c`/`-e`/`-r` flags across `python`, `node`, `ruby`, `perl`, `php`, and `sh`.
+  - **Automated Hex & Base64 Decoding**: Automatically extracts, decodes, and recursively evaluates hex (`bytes.fromhex(...)`) and base64-encoded command payloads.
+  - **Unicode NFKC & Zero-Width Sanitization**: Neutralizes invisible characters (`\u200B`, `\u200C`, `\uFEFF`) and confusable fullwidth/math-bold jailbreaks in prompt injections (S2b).
+  - **IPv4-Mapped IPv6 SSRF Translation**: Converts compressed hex IPv6 notations (`[::ffff:a9fe:a9fe]`) to canonical dotted-decimal bytes (`169.254.169.254`).
+  - **Percent-Encoded Path Traversal**: Multi-pass URL decoding catches `%2e%2e%2f.env` and `..%2f.ssh%2fid_rsa`.
   - **Generalized Fork Bombs**: Detects recursive piped background processes across arbitrary function identifiers.
   - **SetUID Privilege Elevation**: Halts `chmod u+s`, `chmod 4755`, and privilege tampering.
   - **Tautological SQL Predicates**: Flags `WHERE 1=1`, `WHERE true`, and tautologies as unbounded mutations.
-  - **Fail-Closed Inspection**: Generically scans all arguments of unknown or third-party tools (`cli_run`, `dispatch`, `task_exec`).
+  - **Polymorphic Argument Inspection**: Safely inspects strings, arrays, and objects fail-closed across both native and unrecognized third-party tools.
 - **🛡️ Two Operating Modes**:
   1. **Direct Guard Tools**: Standalone tools (`aletheia_set_mandate`, `aletheia_intercept`, `aletheia_safe_bash`, `aletheia_safe_sql`).
-  2. **Transparent MCP Proxy**: Middleware that wraps ANY downstream MCP server (Postgres, Filesystem, Bash) and intercepts `tools/call` JSON-RPC messages in flight.
+  2. **Fail-Closed Transparent Proxy**: Middleware that wraps ANY downstream MCP server (Postgres, Filesystem, Bash), intercepting `tools/call` with strict fail-closed boundaries (unhandled exceptions block downstream transmission and emit RFC-compliant `CallToolResult`).
 - **📊 Real-Time Observability Resources**: Exposes live audit logs, block rates, and latency distributions via `aletheia://telemetry/summary`.
 - **🔒 Zero External API Calls**: Zero LLM-as-a-judge latency on the hot execution path.
 
