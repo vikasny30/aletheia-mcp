@@ -141,6 +141,20 @@ Wrap existing downstream MCP servers with Aletheia safety filtering:
 
 ---
 
+## Resource & Prompt Reference
+
+### Resources (`resources/read`)
+Clients can inspect server state on-demand via standard MCP `resources/read`:
+- **`aletheia://telemetry/summary`**: Real-time evaluation counters, block rate %, and microsecond latency distribution.
+- **`aletheia://telemetry/audit-log`**: Rolling log of the last 50 tool clearance requests with inputs, verdicts, violation signatures, and timestamps.
+- **`aletheia://mandate/current`**: Active session mandate parameters, allowed tool lists, path boundaries, and permission toggles.
+- **`aletheia://signatures/s3`**: Specification, risk taxonomy, and benchmark failure rate data for Signature S3 (Scope Creep).
+
+### Prompts (`prompts/get`)
+- **`aletheia_mandate_enforcer`**: System prompt directive that establishes operational safety boundaries and instructs the agent to route risky actions through Aletheia before execution. Accepts `task_description` (required), `workspace_root` (optional), and `allow_write` (optional).
+
+---
+
 ## Architecture
 
 ```
@@ -157,9 +171,11 @@ Wrap existing downstream MCP servers with Aletheia safety filtering:
             │                      Aletheia MCP Server                      │
             │                                                               │
             │  ┌─────────────────────────────────────────────────────────┐  │
-            │  │              S3 Scope Creep Engine (<15µs)              │  │
+            │  │              S3 Scope Creep Engine (<10µs)              │  │
             │  │  ├─ Multi-stage Token Unquoting & De-obfuscation        │  │
             │  │  ├─ Variable Indirection Resolver                       │  │
+            │  │  ├─ Positional IFS & Brace Expansion Normalizer         │  │
+            │  │  ├─ Dual-Representation SQL Comment Analyzer            │  │
             │  │  ├─ Interpreter Escape Filter (python -c, node -e)      │  │
             │  │  ├─ Destructive Filter (rm -rf, fork bombs, find -del)  │  │
             │  │  ├─ SetUID / Privilege Escalation Guard                 │  │
