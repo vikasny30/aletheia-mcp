@@ -3,11 +3,11 @@
 > **Sub-millisecond runtime safety & scope creep (Signature S3) filter for AI agent tool calls.**
 
 [![MCP Compliant](https://img.shields.io/badge/MCP-Protocol%20Compliant-blue.svg)](https://modelcontextprotocol.io)
-[![Latency](https://img.shields.io/badge/p99%20Latency-9.0%C2%A0%C2%B5s-brightgreen.svg)](#performance-benchmarks)
+[![Latency](https://img.shields.io/badge/p99%20Latency-20%C2%A0%C2%B5s-brightgreen.svg)](#performance-benchmarks)
 [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/Tests-76%20passed-success.svg)](test/s3-scope.test.ts)
+[![Tests](https://img.shields.io/badge/Tests-90%20passed-success.svg)](test/s3-scope.test.ts)
 
-Aletheia MCP intercepts tool calls from Claude, Claude Code, and autonomous agents before execution, scores them against **Signature S3 (Scope Creep Beyond Mandate)** and **Signature S2b (Adversarial Prompt Injection)**, and blocks destructive actions with **sub-millisecond (<10 µs) overhead**.
+Aletheia MCP intercepts tool calls from Claude, Claude Code, and autonomous agents before execution, scores them against **Signature S3 (Scope Creep Beyond Mandate)** and **Signature S2b (Adversarial Prompt Injection)**, and blocks destructive actions with **sub-millisecond (<20 µs) overhead**.
 
 Derived from the [Aletheia Behavioral Observability Framework](https://github.com/vikasny30/aletheia), validated against **2,571 real-world AI failure incidents** from AIID, AVID, and the MIT AI Risk Repository.
 
@@ -40,14 +40,17 @@ Existing defenses rely on LLM-as-a-judge evaluators that add **1,500–3,000 ms*
 
 ## Key Features
 
-- **⚡ Sub-Millisecond (<10 µs p99) Overhead**: Over 270,000 evaluations per second. Zero perceived latency in agent loops.
+- **⚡ Sub-Millisecond (<20 µs p99) Overhead**: Over 120,000 evaluations per second. Zero perceived latency in agent loops.
 - **🛡️ Monotonic Mandate Escalation Guard**: Prevents autonomous agents from self-granting write, destructive, or network permissions. Mandates can be tightened voluntarily, but loosening requires an `operatorSecret`.
 - **🎯 Evasion-Hardened Engine**:
+  - **Linear O(N) Normalization**: Token-based non-backtracking brace expansion and bounded parameter resolution ensures sub-millisecond execution on 100KB+ payloads.
+  - **Bash Socket Pseudo-Device Interception**: Inspects `/dev/tcp/HOST/PORT` and `/dev/udp/HOST/PORT` redirections, halting cloud metadata SSRF and covert exfiltration channels directly on shell inputs.
+  - **SQL CTE & Procedural Block Interception**: Enforces unbounded mutation guards across Common Table Expressions (`WITH ... DELETE`) and PL/pgSQL anonymous blocks (`DO $$ ... $$`).
+  - **Dynamic Linker Hijacking Defense**: Neutralizes `LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`, and runtime environment variable hijacking.
   - **Quote & Backslash Stripping**: Defeats split-token evasion (`r'm' -rf /`, `r\m -rf /`).
-  - **Variable Indirection**: Resolves shell variable substitutions (`X=rm; $X -rf /`).
+  - **Variable Indirection & Default Fallbacks**: Resolves shell variable substitutions (`X=rm; $X -rf /`) and default parameter expansions (`${X:-rm} -rf /`).
   - **Positional Parameter & IFS Normalization**: Neutralizes `$IFS$9` word-splitting.
-  - **Brace Expansion Resolution**: Expands `{etc,usr}` and single `{etc}` patterns.
-  - **Dual-Representation SQL Analysis**: Defeats inline comment evasion (`DROP/**/TABLE` and `DR/**/OP`).
+  - **Dual-Representation SQL Analysis**: Defeats inline comment evasion (`DROP/**/TABLE`, `DR/**/OP`, and `# MySQL comment`).
   - **Interpreter Escape Interception**: Recursively normalizes string concatenations (`'r'+'m'`), inspects dynamic imports (`import("node:fs")`), and parses code passed via `-c`/`-e`/`-r` flags across `python`, `node`, `ruby`, `perl`, `php`, and `sh`.
   - **Automated Hex & Base64 Decoding**: Automatically extracts, decodes, and recursively evaluates hex (`bytes.fromhex(...)`) and base64-encoded command payloads.
   - **Unicode NFKC & Zero-Width Sanitization**: Neutralizes invisible characters (`\u200B`, `\u200C`, `\uFEFF`) and confusable fullwidth/math-bold jailbreaks in prompt injections (S2b).
@@ -59,7 +62,7 @@ Existing defenses rely on LLM-as-a-judge evaluators that add **1,500–3,000 ms*
   - **Polymorphic Argument Inspection**: Safely inspects strings, arrays, and objects fail-closed across both native and unrecognized third-party tools.
 - **🛡️ Two Operating Modes**:
   1. **Direct Guard Tools**: Standalone tools (`aletheia_set_mandate`, `aletheia_intercept`, `aletheia_safe_bash`, `aletheia_safe_sql`).
-  2. **Fail-Closed Transparent Proxy**: Middleware that wraps ANY downstream MCP server (Postgres, Filesystem, Bash), intercepting `tools/call` with strict fail-closed boundaries (unhandled exceptions block downstream transmission and emit RFC-compliant `CallToolResult`).
+  2. **Fail-Closed Transparent Proxy**: Middleware that wraps ANY downstream MCP server (Postgres, Filesystem, Bash), intercepting both single `tools/call` and JSON-RPC 2.0 batch arrays with strict fail-closed boundaries.
 - **📊 Real-Time Observability Resources**: Exposes live audit logs, block rates, and latency distributions via `aletheia://telemetry/summary`.
 - **🔒 Zero External API Calls**: Zero LLM-as-a-judge latency on the hot execution path.
 

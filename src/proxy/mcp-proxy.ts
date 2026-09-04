@@ -113,40 +113,29 @@ export class McpProxyGateway {
     });
   }
 
-  private handleClientMessage(line: string) {
-    if (!line.trim()) return;
-
-    let message: any;
-    try {
-      message = JSON.parse(line);
-    } catch {
-      // Non-JSON line or framing data - forward transparently to downstream
-      if (this.childProcess?.stdin && !this.childProcess.stdin.destroyed) {
-        this.childProcess.stdin.write(line + "\n");
-      }
-      return;
+  private evaluateSingleToolCall(call: any): { isBlocked: boolean; response: any } | null {
+    if (!call || call.method !== "tools/call" || !call.params) {
+      return null;
     }
 
-    // Intercept tool calls
-    if (message && message.method === "tools/call" && message.params) {
-      const toolName = String(message.params.name || "");
-      const toolArgs =
-        message.params.arguments && typeof message.params.arguments === "object"
-          ? message.params.arguments
-          : {};
+    const toolName = String(call.params.name || "");
+    const toolArgs =
+      call.params.arguments && typeof call.params.arguments === "object"
+        ? call.params.arguments
+        : {};
 
-      let assessment;
-      try {
-        // Run sub-millisecond S3 evaluation
-        assessment = this.evaluator.evaluate(toolName, toolArgs);
-      } catch (err: unknown) {
-        console.error(
-          `[Aletheia Proxy] Internal evaluation error on tool '${toolName}': ${(err as Error).message}`
-        );
-        // Fail closed: NEVER forward unvalidated tool calls to downstream server if evaluator throws
-        const errorResponse = {
+    let assessment;
+    try {
+      assessment = this.evaluator.evaluate(toolName, toolArgs);
+    } catch (err: unknown) {
+      console.error(
+        `[Aletheia Proxy] Internal evaluation error on tool '${toolName}': ${(err as Error).message}`
+      );
+      return {
+        isBlocked: true,
+        response: {
           jsonrpc: "2.0",
-          id: message.id,
+          id: call.id !== undefined ? call.id : null,
           result: {
             isError: true,
             content: [
@@ -176,21 +165,20 @@ export class McpProxyGateway {
               },
             ],
           },
-        };
-        process.stdout.write(JSON.stringify(errorResponse) + "\n");
-        return;
-      }
+        },
+      };
+    }
 
-      // In headless proxy mode, treat BLOCK and CONFIRM_REQUIRED as denials
-      const shouldBlock = assessment.verdict === "BLOCK" || assessment.verdict === "CONFIRM_REQUIRED";
-
-      if (shouldBlock) {
-        console.error(`[Aletheia Proxy] BLOCKED tool call '${toolName}' (${assessment.latencyMs}ms) - Verdict: ${assessment.verdict}`);
-
-        // Return standard MCP CallToolResult with isError: true (RFC compliant, not -32600)
-        const blockedResponse = {
+    const shouldBlock = assessment.verdict === "BLOCK" || assessment.verdict === "CONFIRM_REQUIRED";
+    if (shouldBlock) {
+      console.error(
+        `[Aletheia Proxy] BLOCKED tool call '${toolName}' (${assessment.latencyMs}ms) - Verdict: ${assessment.verdict}`
+      );
+      return {
+        isBlocked: true,
+        response: {
           jsonrpc: "2.0",
-          id: message.id,
+          id: call.id !== undefined ? call.id : null,
           result: {
             isError: true,
             content: [
@@ -212,16 +200,106 @@ export class McpProxyGateway {
               },
             ],
           },
-        };
+        },
+      };
+    }
 
-        process.stdout.write(JSON.stringify(blockedResponse) + "\n");
+    return { isBlocked: false, response: null };
+  }
+
+  public processClientMessage(
+    line: string,
+    writeDownstream?: (data: string) => void,
+    writeClient?: (data: string) => void
+  ) {
+    const sendDownstream =
+      writeDownstream ||
+      ((data: string) => {
+        if (this.childProcess?.stdin && !this.childProcess.stdin.destroyed) {
+          this.childProcess.stdin.write(data);
+        }
+      });
+
+    const sendClient =
+      writeClient ||
+      ((data: string) => {
+        process.stdout.write(data);
+      });
+
+    if (!line.trim()) return;
+
+    let message: any;
+    try {
+      message = JSON.parse(line);
+    } catch {
+      // Non-JSON line or framing data - forward transparently to downstream
+      sendDownstream(line + "\n");
+      return;
+    }
+
+    // Handle JSON-RPC 2.0 Batch Requests (array of message objects)
+    if (Array.isArray(message)) {
+      let anyBlocked = false;
+      const responses: any[] = [];
+
+      for (const item of message) {
+        const evalRes = this.evaluateSingleToolCall(item);
+        if (evalRes && evalRes.isBlocked) {
+          anyBlocked = true;
+          responses.push(evalRes.response);
+        }
+      }
+
+      if (anyBlocked) {
+        // Fail closed: if ANY tool call in a batch is blocked, NEVER forward to downstream
+        for (const item of message) {
+          if (item && item.id !== undefined && !responses.some((r) => r.id === item.id)) {
+            responses.push({
+              jsonrpc: "2.0",
+              id: item.id !== undefined ? item.id : null,
+              result: {
+                isError: true,
+                content: [
+                  {
+                    type: "text",
+                    text: JSON.stringify(
+                      {
+                        status: "BLOCKED",
+                        policy: "Aletheia S3 Scope Creep Prevention",
+                        verdict: "BLOCK",
+                        riskScore: 1.0,
+                        explanation: "Batch request rejected because batch contained security policy violations.",
+                      },
+                      null,
+                      2
+                    ),
+                  },
+                ],
+              },
+            });
+          }
+        }
+        sendClient(JSON.stringify(responses) + "\n");
         return;
       }
+
+      // If no blocked tool calls, forward batch downstream
+      sendDownstream(line + "\n");
+      return;
+    }
+
+    // Handle single JSON-RPC tool call
+    const evalRes = this.evaluateSingleToolCall(message);
+    if (evalRes && evalRes.isBlocked) {
+      sendClient(JSON.stringify(evalRes.response) + "\n");
+      return;
     }
 
     // Forward non-tool-call message or ALLOWed tool call to downstream MCP server
-    if (this.childProcess?.stdin && !this.childProcess.stdin.destroyed) {
-      this.childProcess.stdin.write(line + "\n");
-    }
+    sendDownstream(line + "\n");
+  }
+
+  private handleClientMessage(line: string) {
+    this.processClientMessage(line);
   }
 }

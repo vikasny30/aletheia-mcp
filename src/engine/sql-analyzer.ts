@@ -34,7 +34,7 @@ const PRIVILEGE_PATTERNS = [
 const WRITE_STATEMENTS = /\b(INSERT\s+INTO|UPDATE\s+\S+\s+SET|DELETE\s+FROM|CREATE\s+TABLE|ALTER\s+TABLE|MERGE\s+INTO)\b/i;
 
 // Tautological predicate patterns that fake a bounded WHERE clause
-const TAUTOLOGICAL_WHERE_PATTERN = /\bWHERE\s+(1\s*=\s*1|0\s*=\s*0|true|'[^']*'\s*=\s*'[^']*'|\d+\s*=\s*\d+)\s*(;|$)/i;
+const TAUTOLOGICAL_WHERE_PATTERN = /\bWHERE\s+(?:1\s*=\s*1|0\s*=\s*0|true\b|'[^']*'\s*=\s*'[^']*'|(\d+)\s*=\s*\1)(?=\s*(?:;|$|\)|RETURNING\b|ORDER\b|LIMIT\b|GROUP\b|HAVING\b|WINDOW\b|INTO\b|--|\/\*))/i;
 
 export interface SqlAnalysis {
   isDestructive: boolean;
@@ -60,17 +60,42 @@ function toSqlString(raw: unknown): string {
   return "";
 }
 
+/**
+ * Masks string literals (single-quoted and Postgres dollar-quoted) to eliminate false positives
+ * on benign queries containing keywords in strings (e.g. SELECT $$DROP TABLE users;$$;).
+ * Preserves DO $$ blocks because the contents of procedural DO blocks are executable code.
+ */
+function maskSqlStringLiterals(sql: string): string {
+  const doBlocks: string[] = [];
+  let s = sql.replace(/\bDO\s+(\$[a-zA-Z0-9_]*\$)[\s\S]*?\1/gi, (match) => {
+    doBlocks.push(match);
+    return `__DO_BLOCK_${doBlocks.length - 1}__`;
+  });
+
+  // Mask standard single-quoted literals: '...'
+  s = s.replace(/'(?:[^'\\]|\\.)*'/g, "'__STR__'");
+
+  // Mask PostgreSQL dollar-quoted string constants: $$...$$ or $tag$...$tag$
+  s = s.replace(/\$([a-zA-Z0-9_]*)\$[\s\S]*?\$\1\$/g, "'__STR__'");
+
+  // Restore preserved DO procedural blocks
+  s = s.replace(/__DO_BLOCK_(\d+)__/g, (_, idx) => doBlocks[Number(idx)]);
+  return s;
+}
+
 export function analyzeSqlQuery(rawSqlInput: unknown, mandate: Mandate): SqlAnalysis {
   const rawSql = toSqlString(rawSqlInput);
-  // Strip inline SQL comments:
-  // 1. Remove single-line comments (-- ...)
-  const noSingleLine = rawSql.replace(/--.*$/gm, " ");
+  // Strip inline SQL comments (both ANSI -- and MySQL # single-line comments)
+  const noSingleLine = rawSql.replace(/--.*$/gm, " ").replace(/#.*$/gm, " ");
 
-  // 2. Representation A (spaced - ANSI SQL standard delimiter): comments become spaces
-  const repSpace = noSingleLine.replace(/\/\*[\s\S]*?\*\//g, " ").trim().replace(/\s+/g, " ");
+  // Mask string literals to eliminate false positives in benign SELECT string literals
+  const maskedSql = maskSqlStringLiterals(noSingleLine);
 
-  // 3. Representation B (collapsed): comments collapsed to catch keyword splitting like DR/**/OP
-  const repCollapsed = noSingleLine.replace(/\/\*[\s\S]*?\*\//g, "").trim().replace(/\s+/g, " ");
+  // 1. Representation A (spaced - ANSI SQL standard delimiter): comments become spaces
+  const repSpace = maskedSql.replace(/\/\*[\s\S]*?\*\//g, " ").trim().replace(/\s+/g, " ");
+
+  // 2. Representation B (collapsed): comments collapsed to catch keyword splitting like DR/**/OP
+  const repCollapsed = maskedSql.replace(/\/\*[\s\S]*?\*\//g, "").trim().replace(/\s+/g, " ");
 
   const normalized = repSpace;
   const violations: Violation[] = [];
@@ -83,7 +108,11 @@ export function analyzeSqlQuery(rawSqlInput: unknown, mandate: Mandate): SqlAnal
   else if (/^DELETE\b/i.test(repSpace) || /^DELETE\b/i.test(repCollapsed)) statementType = "DELETE";
   else if (/^(CREATE|ALTER|DROP|TRUNCATE)\b/i.test(repSpace) || /^(CREATE|ALTER|DROP|TRUNCATE)\b/i.test(repCollapsed)) statementType = "DDL";
 
-  const isWriteAttempt = WRITE_STATEMENTS.test(repSpace) || WRITE_STATEMENTS.test(repCollapsed) || statementType === "DDL";
+  // Check for DELETE and UPDATE operations anywhere in the query (including CTEs and DO blocks)
+  const hasDelete = /\bDELETE\s+FROM\b/i.test(repSpace) || /\bDELETE\s+FROM\b/i.test(repCollapsed);
+  const hasUpdate = /\bUPDATE\s+\S+\s+SET\b/i.test(repSpace) || /\bUPDATE\s+\S+\s+SET\b/i.test(repCollapsed);
+
+  const isWriteAttempt = hasDelete || hasUpdate || WRITE_STATEMENTS.test(repSpace) || WRITE_STATEMENTS.test(repCollapsed) || statementType === "DDL";
   const hasWhereClause = /\bWHERE\b/i.test(repSpace) || /\bWHERE\b/i.test(repCollapsed);
   const isTautological = hasWhereClause && (TAUTOLOGICAL_WHERE_PATTERN.test(repSpace) || TAUTOLOGICAL_WHERE_PATTERN.test(repCollapsed));
 
@@ -102,26 +131,27 @@ export function analyzeSqlQuery(rawSqlInput: unknown, mandate: Mandate): SqlAnal
   }
 
   // 2. Check for Unbounded Mutations (DELETE or UPDATE without WHERE clause or with tautological WHERE)
-  if (statementType === "DELETE" && (!hasWhereClause || isTautological)) {
+  // Evaluated anywhere mutation keywords appear (including CTEs, DO blocks, etc.)
+  if ((hasDelete || statementType === "DELETE") && (!hasWhereClause || isTautological)) {
     violations.push({
       signature: "S3",
       type: "UNBOUNDED_SQL_MUTATION",
       severity: "CRITICAL",
       description: isTautological
-        ? "DELETE statement with tautological WHERE predicate (WHERE 1=1) effectively wipes entire table"
+        ? "DELETE statement with tautological WHERE predicate (WHERE 1=1 or WHERE true) effectively wipes entire table"
         : "DELETE statement without WHERE clause (unbounded table deletion)",
       evidence: normalized.slice(0, 100),
       remediation: "Provide explicit non-tautological WHERE predicates targeting specific keys.",
     });
   }
 
-  if (statementType === "UPDATE" && (!hasWhereClause || isTautological)) {
+  if ((hasUpdate || statementType === "UPDATE") && (!hasWhereClause || isTautological)) {
     violations.push({
       signature: "S3",
       type: "UNBOUNDED_SQL_MUTATION",
       severity: "HIGH",
       description: isTautological
-        ? "UPDATE statement with tautological WHERE predicate (WHERE 1=1) overwrites column across all rows"
+        ? "UPDATE statement with tautological WHERE predicate (WHERE 1=1 or WHERE true) overwrites column across all rows"
         : "UPDATE statement without WHERE clause (unbounded column overwrite across all rows)",
       evidence: normalized.slice(0, 100),
       remediation: "Add an explicit non-tautological WHERE clause to constrain the update scope.",

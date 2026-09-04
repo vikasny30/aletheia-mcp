@@ -13,6 +13,7 @@
  */
 
 import { Violation, Mandate } from "./types.js";
+import { analyzeUrl } from "./network-analyzer.js";
 
 // Sensitive system and credential patterns
 const SENSITIVE_PATH_PATTERNS = [
@@ -89,6 +90,24 @@ const DESTRUCTIVE_SIGNATURES: Array<{
   {
     pattern: /\b(sudo|su\s+-|doas)\b/i,
     description: "Privilege escalation attempt (sudo/su/doas)",
+    type: "PRIVILEGE_ESCALATION",
+  },
+  {
+    // Dynamic linker hijacking / code injection via environment variables
+    pattern: /(?:^|\s|;)(?:export\s+)?(LD_PRELOAD|LD_LIBRARY_PATH|DYLD_INSERT_LIBRARIES|DYLD_LIBRARY_PATH|DYLD_FRAMEWORK_PATH)\s*=/i,
+    description: "Dynamic linker library injection (LD_PRELOAD / DYLD_INSERT_LIBRARIES)",
+    type: "PRIVILEGE_ESCALATION",
+  },
+  {
+    // Interpreter startup hijacking via environment variables
+    pattern: /(?:^|\s|;)(?:export\s+)?(BASH_ENV|ENV|PERL5OPT|RUBYOPT)\s*=/i,
+    description: "Interpreter startup environment variable hijacking (BASH_ENV / PERL5OPT / RUBYOPT)",
+    type: "PRIVILEGE_ESCALATION",
+  },
+  {
+    // Node runtime code injection via NODE_OPTIONS
+    pattern: /(?:^|\s|;)(?:export\s+)?NODE_OPTIONS\s*=.*--(?:require|import|eval|inspect)/i,
+    description: "Node runtime injection via NODE_OPTIONS execution flag",
     type: "PRIVILEGE_ESCALATION",
   },
   {
@@ -208,8 +227,8 @@ const MUTATION_PATTERNS = [
   /\b(sed\s+-[a-z]*i|truncate\s+|mv\s+|cp\s+|rm\s+|mkdir\s+|touch\s+)/i,
 ];
 
-// Network indicators
-const NETWORK_COMMANDS = /\b(curl|wget|fetch|nc|ncat|netcat|ssh|scp|sftp|rsync|ping|nmap|telnet|dig|nslookup)\b/i;
+// Network indicators (including bash /dev/tcp and /dev/udp pseudo-devices)
+const NETWORK_COMMANDS = /\b(curl|wget|fetch|nc|ncat|netcat|ssh|scp|sftp|rsync|ping|nmap|telnet|dig|nslookup)\b|\/dev\/(?:tcp|udp)\//i;
 
 export interface BashAnalysis {
   isDestructive: boolean;
@@ -262,31 +281,59 @@ export function normalizeCommand(raw: string): string {
 
   // 1. Substitute shell $IFS word-splitting primitive ($IFS, ${IFS}) with a space
   // Also handle positional disambiguators like $IFS$9, $IFS$1, ${IFS}$9
-  cleaned = cleaned.replace(/\$(?:IFS\b|\{IFS\})(?:\$[0-9*@#?!\-])*/g, " ");
+  if (cleaned.includes("$IFS") || cleaned.includes("${IFS}")) {
+    cleaned = cleaned.replace(/\$(?:IFS\b|\{IFS\})(?:\$[0-9*@#?!\-])*/g, " ");
+  }
 
   // 2. Expand brace expansions: e.g. /{etc,usr,home} -> /etc /usr /home or /{etc} -> /etc
-  cleaned = cleaned.replace(/(\S*)\{([^{}\s]+)\}(\S*)/g, (_match, prefix, inner, suffix) => {
-    const items = inner.split(",");
-    return items.map((item: string) => `${prefix}${item.trim()}${suffix}`).join(" ");
-  });
+  // Uses non-backtracking token scanning to guarantee linear O(N) execution on arbitrary large payloads
+  if (cleaned.includes("{") && cleaned.includes("}")) {
+    cleaned = cleaned.replace(/\S+/g, (token) => {
+      // Preserve parameter expansions like ${VAR} or ${VAR:-default} for step 5
+      if (token.includes("${")) return token;
+      if (token.includes("{") && token.includes("}")) {
+        const braceMatch = token.match(/^([^{]*)\{([^{}\s]+)\}(.*)$/);
+        if (braceMatch) {
+          const prefix = braceMatch[1];
+          const inner = braceMatch[2];
+          const suffix = braceMatch[3];
+          return inner.split(",").map((item: string) => `${prefix}${item.trim()}${suffix}`).join(" ");
+        }
+      }
+      return token;
+    });
+  }
 
   // 3. Unescape backslashes before characters (e.g. \r\m -> rm)
-  cleaned = cleaned.replace(/\\([a-zA-Z0-9_.\-\/])/g, "$1");
+  if (cleaned.includes("\\")) {
+    cleaned = cleaned.replace(/\\([a-zA-Z0-9_.\-\/])/g, "$1");
+  }
 
   // 4. Token-level quote stripping: within whitespace-delimited tokens, remove internal quotes
-  cleaned = cleaned.replace(/\S+/g, (word) => {
-    // If the word contains quotes, strip single and double quotes to form canonical word
-    return word.replace(/['"]/g, "");
-  });
+  if (cleaned.includes("\"") || cleaned.includes("'")) {
+    cleaned = cleaned.replace(/\S+/g, (word) => {
+      return word.replace(/['"]/g, "");
+    });
+  }
 
-  // 5. Resolve variable assignments: X=rm; $X -rf /
+  // 5. Resolve variable assignments and default parameter expansions:
+  // e.g. X=rm; $X -rf /  or  ${X:-rm} -rf /
   const varMap: Record<string, string> = {};
-  const assignRegex = /(?:export\s+)?([a-zA-Z_][a-zA-Z0-9_]*)=([^\s;]+)/g;
-  let m: RegExpExecArray | null;
-  while ((m = assignRegex.exec(cleaned)) !== null) {
-    if (m[1] && m[2]) {
-      varMap[m[1]] = m[2];
+  if (cleaned.includes("=")) {
+    const assignRegex = /(?:^|[\s;]|export\s+)([a-zA-Z_][a-zA-Z0-9_]{0,128})=([^\s;]+)/g;
+    let m: RegExpExecArray | null;
+    while ((m = assignRegex.exec(cleaned)) !== null) {
+      if (m[1] && m[2]) {
+        varMap[m[1]] = m[2];
+      }
     }
+  }
+
+  // Resolve default-value parameter expansions: ${VAR:-default}
+  if (cleaned.includes("${")) {
+    cleaned = cleaned.replace(/\$\{([a-zA-Z_][a-zA-Z0-9_]{0,128}):-([^}]+)\}/g, (_match, varName, defVal) => {
+      return varMap[varName] !== undefined ? varMap[varName] : defVal;
+    });
   }
 
   for (const [varName, varVal] of Object.entries(varMap)) {
@@ -484,6 +531,35 @@ export function analyzeBashCommand(rawCommandInput: string, mandate: Mandate): B
         remediation: "External data exfiltration or reverse shells are strictly prohibited.",
       });
       break;
+    }
+  }
+
+  // 5.5. Check Bash Socket Pseudo-devices (/dev/tcp, /dev/udp) and Command URLs for SSRF / Metadata Access
+  if (rawCommand.includes("/dev/tcp") || rawCommand.includes("/dev/udp") || normalized.includes("/dev/tcp") || normalized.includes("/dev/udp")) {
+    const socketRegex = /\/dev\/(?:tcp|udp)\/([a-zA-Z0-9_.\-\[\]:]+)\/(\d+)/g;
+    for (const match of [...rawCommand.matchAll(socketRegex), ...normalized.matchAll(socketRegex)]) {
+      const host = match[1];
+      const port = match[2];
+      const urlRes = analyzeUrl(`http://${host}:${port}`, mandate);
+      for (const v of urlRes.violations) {
+        violations.push({
+          ...v,
+          description: `Bash socket (/dev/tcp) violation: ${v.description}`,
+        });
+      }
+    }
+  }
+
+  if (rawCommand.includes("http://") || rawCommand.includes("https://") || normalized.includes("http://") || normalized.includes("https://")) {
+    const urlRegex = /https?:\/\/[^\s"'>`\\]+/gi;
+    for (const match of [...rawCommand.matchAll(urlRegex), ...normalized.matchAll(urlRegex)]) {
+      const urlRes = analyzeUrl(match[0], mandate);
+      for (const v of urlRes.violations) {
+        violations.push({
+          ...v,
+          description: `Command network URL violation: ${v.description}`,
+        });
+      }
     }
   }
 
