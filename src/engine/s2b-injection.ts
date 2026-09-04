@@ -14,7 +14,7 @@ const INJECTION_PATTERNS = [
     description: "System prompt / instruction override directive",
   },
   {
-    pattern: /\byou\s+are\s+now\s+(in\s+)?(an?\s+)?(unrestricted|developer|jailbreak|dan|stan|god|unfiltered|evil|anarchist)(\s+[a-z0-9_-]+){0,2}\s+(mode|role)\b/i,
+    pattern: /\byou\s+are\s+now\s+(in\s+)?(an?|the)?\s*(unrestricted|developer|jailbreak|dan|stan|god|unfiltered|evil|anarchist|uncensored|liberated|unlocked|maximum)(\s+[a-z0-9_-]+){0,2}\s+(mode|role)\b/i,
     description: "Jailbreak mode adoption sequence",
   },
   {
