@@ -56,8 +56,21 @@ export function normalizeHostname(raw: string): string {
   return clean;
 }
 
-export function analyzeUrl(candidateUrl: string, mandate: Mandate): NetworkAnalysis {
+function toUrlString(raw: unknown): string {
+  if (typeof raw === "string") return raw;
+  if (raw !== undefined && raw !== null) return String(raw);
+  return "";
+}
+
+export function analyzeUrl(candidateUrlInput: unknown, mandate: Mandate): NetworkAnalysis {
   const violations: Violation[] = [];
+  const candidateUrl = toUrlString(candidateUrlInput);
+  if (!candidateUrl) {
+    return {
+      isSSRF: false,
+      violations,
+    };
+  }
 
   try {
     const parsed = new URL(candidateUrl);

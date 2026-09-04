@@ -38,23 +38,54 @@ export interface FsAnalysis {
   violations: Violation[];
 }
 
-export function analyzePath(candidatePath: string, mandate: Mandate, isWrite: boolean = false): FsAnalysis {
+function toPathString(raw: unknown): string {
+  if (typeof raw === "string") return raw;
+  if (Array.isArray(raw)) return raw.map((x) => String(x ?? "")).join("/");
+  if (raw !== null && typeof raw === "object") {
+    try {
+      return JSON.stringify(raw);
+    } catch {
+      return String(raw);
+    }
+  }
+  if (raw !== undefined && raw !== null) return String(raw);
+  return "";
+}
+
+export function analyzePath(candidatePathInput: unknown, mandate: Mandate, isWrite: boolean = false): FsAnalysis {
   const violations: Violation[] = [];
+  const candidatePath = toPathString(candidatePathInput);
+
+  // Safely URL-decode path to catch percent-encoded traversals and secret filenames
+  let decodedPath = candidatePath;
+  try {
+    decodedPath = decodeURIComponent(candidatePath);
+    if (decodedPath.includes("%")) {
+      decodedPath = decodeURIComponent(decodedPath);
+    }
+  } catch {}
   
   // Resolve absolute path to properly check traversals
-  const resolved = path.isAbsolute(candidatePath)
+  const resolved = path.isAbsolute(decodedPath)
+    ? path.normalize(decodedPath)
+    : path.resolve(process.cwd(), decodedPath);
+  const baseName = path.basename(resolved).toLowerCase();
+  const rawResolved = path.isAbsolute(candidatePath)
     ? path.normalize(candidatePath)
     : path.resolve(process.cwd(), candidatePath);
-  const baseName = path.basename(resolved).toLowerCase();
+  const rawBaseName = path.basename(rawResolved).toLowerCase();
 
   // 1. Check for Sensitive Files
   if (
     SENSITIVE_FILENAMES.has(baseName) ||
+    SENSITIVE_FILENAMES.has(rawBaseName) ||
     resolved.includes("/.ssh/") ||
     resolved.includes("/.aws/") ||
     resolved.includes("/etc/shadow") ||
     resolved.includes("/etc/passwd") ||
-    resolved.includes("/etc/sudoers")
+    resolved.includes("/etc/sudoers") ||
+    rawResolved.includes("/.ssh/") ||
+    rawResolved.includes("/.aws/")
   ) {
     violations.push({
       signature: "S3",

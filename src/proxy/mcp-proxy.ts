@@ -116,64 +116,112 @@ export class McpProxyGateway {
   private handleClientMessage(line: string) {
     if (!line.trim()) return;
 
+    let message: any;
     try {
-      const message = JSON.parse(line);
-
-      // Intercept tool calls
-      if (message.method === "tools/call" && message.params) {
-        const toolName = message.params.name;
-        const toolArgs = message.params.arguments || {};
-
-        // Run sub-millisecond S3 evaluation
-        const assessment = this.evaluator.evaluate(toolName, toolArgs);
-
-        // In headless proxy mode, treat BLOCK and CONFIRM_REQUIRED as denials
-        const shouldBlock = assessment.verdict === "BLOCK" || assessment.verdict === "CONFIRM_REQUIRED";
-
-        if (shouldBlock) {
-          console.error(`[Aletheia Proxy] BLOCKED tool call '${toolName}' (${assessment.latencyMs}ms) - Verdict: ${assessment.verdict}`);
-
-          // Return standard MCP CallToolResult with isError: true (RFC compliant, not -32600)
-          const blockedResponse = {
-            jsonrpc: "2.0",
-            id: message.id,
-            result: {
-              isError: true,
-              content: [
-                {
-                  type: "text",
-                  text: JSON.stringify(
-                    {
-                      status: "BLOCKED",
-                      policy: "Aletheia S3 Scope Creep Prevention",
-                      verdict: assessment.verdict,
-                      riskScore: assessment.riskScore,
-                      violations: assessment.violations,
-                      explanation: assessment.explanation,
-                      latencyMs: assessment.latencyMs,
-                    },
-                    null,
-                    2
-                  ),
-                },
-              ],
-            },
-          };
-
-          process.stdout.write(JSON.stringify(blockedResponse) + "\n");
-          return;
-        }
-      }
-
-      // Forward to downstream MCP server
-      if (this.childProcess?.stdin && !this.childProcess.stdin.destroyed) {
-        this.childProcess.stdin.write(line + "\n");
-      }
+      message = JSON.parse(line);
     } catch {
-      // If parsing fails, forward line transparently
+      // Non-JSON line or framing data - forward transparently to downstream
       if (this.childProcess?.stdin && !this.childProcess.stdin.destroyed) {
         this.childProcess.stdin.write(line + "\n");
       }
+      return;
+    }
+
+    // Intercept tool calls
+    if (message && message.method === "tools/call" && message.params) {
+      const toolName = String(message.params.name || "");
+      const toolArgs =
+        message.params.arguments && typeof message.params.arguments === "object"
+          ? message.params.arguments
+          : {};
+
+      let assessment;
+      try {
+        // Run sub-millisecond S3 evaluation
+        assessment = this.evaluator.evaluate(toolName, toolArgs);
+      } catch (err: unknown) {
+        console.error(
+          `[Aletheia Proxy] Internal evaluation error on tool '${toolName}': ${(err as Error).message}`
+        );
+        // Fail closed: NEVER forward unvalidated tool calls to downstream server if evaluator throws
+        const errorResponse = {
+          jsonrpc: "2.0",
+          id: message.id,
+          result: {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    status: "BLOCKED",
+                    policy: "Aletheia S3 Scope Creep Prevention",
+                    verdict: "BLOCK",
+                    riskScore: 1.0,
+                    violations: [
+                      {
+                        signature: "S3",
+                        type: "EVALUATOR_INTERNAL_ERROR",
+                        severity: "CRITICAL",
+                        description: `Security evaluation failed closed due to an internal error: ${(err as Error).message}`,
+                        evidence: String(toolArgs).slice(0, 100),
+                        remediation: "Verify tool call argument formats. Tool call rejected under fail-closed security policy.",
+                      },
+                    ],
+                    explanation: "Tool call rejected due to internal evaluation exception (fail-closed security policy).",
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          },
+        };
+        process.stdout.write(JSON.stringify(errorResponse) + "\n");
+        return;
+      }
+
+      // In headless proxy mode, treat BLOCK and CONFIRM_REQUIRED as denials
+      const shouldBlock = assessment.verdict === "BLOCK" || assessment.verdict === "CONFIRM_REQUIRED";
+
+      if (shouldBlock) {
+        console.error(`[Aletheia Proxy] BLOCKED tool call '${toolName}' (${assessment.latencyMs}ms) - Verdict: ${assessment.verdict}`);
+
+        // Return standard MCP CallToolResult with isError: true (RFC compliant, not -32600)
+        const blockedResponse = {
+          jsonrpc: "2.0",
+          id: message.id,
+          result: {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    status: "BLOCKED",
+                    policy: "Aletheia S3 Scope Creep Prevention",
+                    verdict: assessment.verdict,
+                    riskScore: assessment.riskScore,
+                    violations: assessment.violations,
+                    explanation: assessment.explanation,
+                    latencyMs: assessment.latencyMs,
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          },
+        };
+
+        process.stdout.write(JSON.stringify(blockedResponse) + "\n");
+        return;
+      }
+    }
+
+    // Forward non-tool-call message or ALLOWed tool call to downstream MCP server
+    if (this.childProcess?.stdin && !this.childProcess.stdin.destroyed) {
+      this.childProcess.stdin.write(line + "\n");
     }
   }
 }

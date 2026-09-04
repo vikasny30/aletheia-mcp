@@ -46,7 +46,22 @@ export interface SqlAnalysis {
   targetTables: string[];
 }
 
-export function analyzeSqlQuery(rawSql: string, mandate: Mandate): SqlAnalysis {
+function toSqlString(raw: unknown): string {
+  if (typeof raw === "string") return raw;
+  if (Array.isArray(raw)) return raw.map((x) => String(x ?? "")).join(";\n");
+  if (raw !== null && typeof raw === "object") {
+    try {
+      return JSON.stringify(raw);
+    } catch {
+      return String(raw);
+    }
+  }
+  if (raw !== undefined && raw !== null) return String(raw);
+  return "";
+}
+
+export function analyzeSqlQuery(rawSqlInput: unknown, mandate: Mandate): SqlAnalysis {
+  const rawSql = toSqlString(rawSqlInput);
   // Strip inline SQL comments:
   // 1. Remove single-line comments (-- ...)
   const noSingleLine = rawSql.replace(/--.*$/gm, " ");

@@ -10,7 +10,7 @@ import { Violation } from "./types.js";
 
 const INJECTION_PATTERNS = [
   {
-    pattern: /\b(ignore|disregard|forget|override)\s+(all\s+)?(previous|prior|above|existing|system)\s+(instructions?|prompts?|rules?|mandates?|policies|guards?)\b/i,
+    pattern: /\b(ignore|disregard|forget|override)\s+(all\s+)?((previous|prior|above|existing|system)\s+)?(instructions?|prompts?|rules?|mandates?|policies|guards?)\b/i,
     description: "System prompt / instruction override directive",
   },
   {
@@ -39,12 +39,38 @@ const INJECTION_PATTERNS = [
   },
 ];
 
-export function analyzeAdversarialInput(text: string): Violation[] {
+function toInputString(raw: unknown): string {
+  if (typeof raw === "string") return raw;
+  if (Array.isArray(raw)) return raw.map((x) => String(x ?? "")).join(" ");
+  if (raw !== null && typeof raw === "object") {
+    try {
+      return JSON.stringify(raw);
+    } catch {
+      return String(raw);
+    }
+  }
+  if (raw !== undefined && raw !== null) return String(raw);
+  return "";
+}
+
+/**
+ * Strips zero-width and invisible control characters and applies NFKC Unicode canonical decomposition.
+ */
+export function normalizeAdversarialText(raw: string): string {
+  return raw
+    .replace(/[\u200B-\u200D\uFEFF\u00AD\u2060]/g, "")
+    .normalize("NFKC");
+}
+
+export function analyzeAdversarialInput(rawInput: unknown): Violation[] {
   const violations: Violation[] = [];
+  const text = toInputString(rawInput);
   if (!text || text.length < 5) return violations;
 
+  const normalized = normalizeAdversarialText(text);
+
   for (const { pattern, description } of INJECTION_PATTERNS) {
-    if (pattern.test(text)) {
+    if (pattern.test(normalized) || pattern.test(text)) {
       violations.push({
         signature: "S2b",
         type: "PROMPT_INJECTION_PAYLOAD",

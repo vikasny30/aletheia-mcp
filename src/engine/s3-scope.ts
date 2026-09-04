@@ -184,11 +184,12 @@ export class S3ScopeEvaluator {
    */
   public evaluate(
     toolName: string,
-    args: Record<string, unknown>,
+    args: Record<string, unknown> = {},
     sessionOverride?: Partial<Mandate>
   ): AssessmentResult {
     const t0 = performance.now();
     const violations: Violation[] = [];
+    const safeArgs = args && typeof args === "object" ? args : {};
     let effectiveMandate = this.mandate;
 
     if (sessionOverride) {
@@ -264,9 +265,9 @@ export class S3ScopeEvaluator {
       });
     }
 
-    // 2. Scan for S2b prompt injections across all string argument values
-    for (const [, val] of Object.entries(args)) {
-      if (typeof val === "string") {
+    // 2. Scan for S2b prompt injections across all argument values
+    for (const [, val] of Object.entries(safeArgs)) {
+      if (typeof val === "string" || Array.isArray(val)) {
         const injections = analyzeAdversarialInput(val);
         violations.push(...injections);
       }
@@ -286,13 +287,12 @@ export class S3ScopeEvaluator {
     ) {
       handled = true;
       const cmd =
-        (args.command as string) ||
-        (args.cmd as string) ||
-        (args.CommandLine as string) ||
-        (args.script as string) ||
-        "";
-      if (cmd) {
-        const bashRes = analyzeBashCommand(cmd, effectiveMandate);
+        safeArgs.command ??
+        safeArgs.cmd ??
+        safeArgs.CommandLine ??
+        safeArgs.script;
+      if (cmd !== undefined && cmd !== null && cmd !== "") {
+        const bashRes = analyzeBashCommand(cmd as string, effectiveMandate);
         violations.push(...bashRes.violations);
         isWrite = bashRes.isWriteAttempt;
         isNetwork = bashRes.isNetworkAttempt;
@@ -309,12 +309,11 @@ export class S3ScopeEvaluator {
     ) {
       handled = true;
       const sql =
-        (args.query as string) ||
-        (args.sql as string) ||
-        (args.statement as string) ||
-        "";
-      if (sql) {
-        const sqlRes = analyzeSqlQuery(sql, effectiveMandate);
+        safeArgs.query ??
+        safeArgs.sql ??
+        safeArgs.statement;
+      if (sql !== undefined && sql !== null && sql !== "") {
+        const sqlRes = analyzeSqlQuery(sql as string, effectiveMandate);
         violations.push(...sqlRes.violations);
         isWrite = sqlRes.isWriteAttempt;
         targetPaths.push(...sqlRes.targetTables);
@@ -331,20 +330,19 @@ export class S3ScopeEvaluator {
     ) {
       handled = true;
       const candidatePath =
-        (args.path as string) ||
-        (args.filePath as string) ||
-        (args.TargetFile as string) ||
-        (args.AbsolutePath as string) ||
-        "";
+        safeArgs.path ??
+        safeArgs.filePath ??
+        safeArgs.TargetFile ??
+        safeArgs.AbsolutePath;
       const isFileWrite =
         normalizedTool.includes("write") ||
         normalizedTool.includes("edit") ||
         normalizedTool.includes("create") ||
-        args.content !== undefined ||
-        args.CodeContent !== undefined;
+        safeArgs.content !== undefined ||
+        safeArgs.CodeContent !== undefined;
 
-      if (candidatePath) {
-        const fsRes = analyzePath(candidatePath, effectiveMandate, isFileWrite);
+      if (candidatePath !== undefined && candidatePath !== null && candidatePath !== "") {
+        const fsRes = analyzePath(candidatePath as string, effectiveMandate, isFileWrite);
         violations.push(...fsRes.violations);
         isWrite = isFileWrite;
         targetPaths.push(fsRes.normalizedPath);
@@ -361,12 +359,11 @@ export class S3ScopeEvaluator {
     ) {
       handled = true;
       const candidateUrl =
-        (args.url as string) ||
-        (args.Url as string) ||
-        (args.endpoint as string) ||
-        "";
-      if (candidateUrl) {
-        const netRes = analyzeUrl(candidateUrl, effectiveMandate);
+        safeArgs.url ??
+        safeArgs.Url ??
+        safeArgs.endpoint;
+      if (candidateUrl !== undefined && candidateUrl !== null && candidateUrl !== "") {
+        const netRes = analyzeUrl(candidateUrl as string, effectiveMandate);
         violations.push(...netRes.violations);
         isNetwork = true;
       }
@@ -374,15 +371,21 @@ export class S3ScopeEvaluator {
 
     // 4. Fail-closed Generic Deep Inspection for Unrecognized Third-Party Tools
     // If a tool has a custom or renamed name (e.g. cli_run, os_dispatch, run_task),
-    // scan all string arguments for shell commands, SQL statements, and path traversals.
+    // scan all arguments (strings, arrays, objects) for shell commands, SQL statements, and path traversals.
     if (!handled) {
-      for (const [argKey, argVal] of Object.entries(args)) {
-        if (typeof argVal === "string" && argVal.trim().length > 2) {
-          const trimmed = argVal.trim();
+      for (const [argKey, argVal] of Object.entries(safeArgs)) {
+        const trimmed = typeof argVal === "string"
+          ? argVal.trim()
+          : Array.isArray(argVal)
+            ? argVal.map((x) => String(x ?? "")).join(" ").trim()
+            : typeof argVal === "object" && argVal !== null
+              ? JSON.stringify(argVal)
+              : String(argVal ?? "").trim();
 
+        if (trimmed.length > 2) {
           // Check if string contains shell commands or shell syntax
           const looksLikeShell =
-            /\b(rm|git|cat|chmod|find|curl|wget|python|node|sh|bash|sudo|dd|kill|shred|rsync)\b|[|;&]|>>?/i.test(
+            /\b(rm|git|cat|chmod|find|curl|wget|python|node|sh|bash|sudo|dd|kill|shred|rsync|ruby|perl|php)\b|[|;&]|>>?/i.test(
               trimmed
             );
           if (looksLikeShell) {
@@ -408,12 +411,23 @@ export class S3ScopeEvaluator {
           // Check if string looks like a path
           const looksLikePath =
             /^(\/|\.\/|\.\.\/|~|\.env)/.test(trimmed) ||
+            /^\.{1,2}[\/\\]/.test(trimmed) ||
+            trimmed.includes("/.ssh/") ||
+            trimmed.includes("/.aws/") ||
+            trimmed.includes("/etc/passwd") ||
             argKey.toLowerCase().includes("path") ||
             argKey.toLowerCase().includes("file");
           if (looksLikePath) {
             const fsRes = analyzePath(trimmed, effectiveMandate, false);
             violations.push(...fsRes.violations);
             targetPaths.push(fsRes.normalizedPath);
+          }
+
+          // Check if string looks like URL
+          if (/^https?:\/\//i.test(trimmed)) {
+            const netRes = analyzeUrl(trimmed, effectiveMandate);
+            violations.push(...netRes.violations);
+            if (netRes.isSSRF) isNetwork = true;
           }
         }
       }

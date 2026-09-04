@@ -148,19 +148,19 @@ const INTERPRETER_PATTERNS = [
   },
   {
     runtime: "perl",
-    pattern: /\bperl\s+(-[a-zA-Z0-9]*e)\s+([\x27"])([\s\S]*?)\3/i,
+    pattern: /\b(perl)\s+(-[a-zA-Z0-9]*e)\s+([\x27"])([\s\S]*?)\3/i,
   },
   {
     runtime: "ruby",
-    pattern: /\bruby\s+(-[a-zA-Z0-9]*e)\s+([\x27"])([\s\S]*?)\3/i,
+    pattern: /\b(ruby)\s+(-[a-zA-Z0-9]*e)\s+([\x27"])([\s\S]*?)\3/i,
   },
   {
     runtime: "php",
-    pattern: /\bphp\s+(-[a-zA-Z0-9]*r)\s+([\x27"])([\s\S]*?)\3/i,
+    pattern: /\b(php)\s+(-[a-zA-Z0-9]*r)\s+([\x27"])([\s\S]*?)\3/i,
   },
   {
     runtime: "shell",
-    pattern: /\b(ba|z)?sh\s+(-[a-zA-Z0-9]*c)\s+([\x27"])([\s\S]*?)\3/i,
+    pattern: /\b((?:ba|z)?sh)\s+(-[a-zA-Z0-9]*c)\s+([\x27"])([\s\S]*?)\3/i,
   },
 ];
 
@@ -174,9 +174,17 @@ const DANGEROUS_INTERPRETER_CALLS = [
   { pattern: /importlib/i, description: "Dynamic module import (importlib)" },
   { pattern: /subprocess\.(run|Popen|call|check_output)\s*\(/i, description: "Python subprocess execution" },
   { pattern: /shutil\.rmtree\s*\(/i, description: "Python recursive filesystem wipe (shutil.rmtree)" },
+  { pattern: /\b(bytes\.fromhex|bytearray\.fromhex|unhexlify)\b/i, description: "Dynamic hex payload decoding in interpreter" },
+  { pattern: /\b(exec|eval)\s*\(\s*(bytes\.fromhex|bytearray\.fromhex|unhexlify|base64)/i, description: "Dynamic execution of decoded payload" },
   { pattern: /child_process/i, description: "Node.js child_process invocation" },
-  { pattern: /fs\.(rmSync|rmdirSync|unlinkSync|rm)\s*\(/i, description: "Node.js fs file/directory deletion" },
+  { pattern: /\b(import|require)\s*\(\s*['"](node:)?(fs|child_process|vm)/i, description: "Node.js dynamic fs/child_process import" },
+  { pattern: /\b(fs\.)?(rmSync|rmdirSync|unlinkSync|rm)\s*\(/i, description: "Node.js fs file/directory deletion" },
   { pattern: /(execSync|spawnSync)\s*\(/i, description: "Node.js synchronous process execution" },
+  { pattern: /\bprocess\.(mainModule|binding)\b/i, description: "Node.js process module escape" },
+  { pattern: /\bFileUtils\.(rm_rf|rm|remove_dir|remove_entry)\b/i, description: "Ruby FileUtils recursive wipe" },
+  { pattern: /\bKernel\.(system|exec)\b/i, description: "Ruby Kernel shell execution" },
+  { pattern: /\b(shell_exec|passthru)\s*\(/i, description: "PHP shell execution" },
+  { pattern: /\bunlink\s+(glob|\$)/i, description: "Perl bulk file unlinking" },
 ];
 
 // Exfiltration signatures
@@ -214,6 +222,33 @@ export interface BashAnalysis {
   targetPaths: string[];
 }
 
+function toCommandString(raw: unknown): string {
+  if (typeof raw === "string") return raw;
+  if (Array.isArray(raw)) return raw.map((x) => String(x ?? "")).join(" ");
+  if (raw !== null && typeof raw === "object") {
+    try {
+      return JSON.stringify(raw);
+    } catch {
+      return String(raw);
+    }
+  }
+  if (raw !== undefined && raw !== null) return String(raw);
+  return "";
+}
+
+function extractAndDecodeHex(raw: string): string | null {
+  const m = raw.match(/(?:fromhex|unhexlify)\s*\(\s*['"]([0-9a-fA-F]+)['"]\s*\)/i);
+  if (m && m[1].length >= 4 && m[1].length % 2 === 0) {
+    try {
+      const decoded = Buffer.from(m[1], "hex").toString("utf8");
+      if (/[\x20-\x7E]{2,}/.test(decoded)) {
+        return decoded;
+      }
+    } catch {}
+  }
+  return null;
+}
+
 /**
  * Normalizes command text by:
  * 1. Stripping null bytes.
@@ -222,7 +257,8 @@ export interface BashAnalysis {
  * 4. Resolving simple shell variable assignment indirection (X=rm; $X -rf /).
  */
 export function normalizeCommand(raw: string): string {
-  let cleaned = raw.trim().replace(/\0/g, "");
+  const str = toCommandString(raw);
+  let cleaned = str.trim().replace(/\0/g, "");
 
   // 1. Substitute shell $IFS word-splitting primitive ($IFS, ${IFS}) with a space
   // Also handle positional disambiguators like $IFS$9, $IFS$1, ${IFS}$9
@@ -289,7 +325,8 @@ export function extractAndDecodeBase64(command: string): string | null {
 /**
  * High-speed deterministic Bash safety analysis (<0.1ms)
  */
-export function analyzeBashCommand(rawCommand: string, mandate: Mandate): BashAnalysis {
+export function analyzeBashCommand(rawCommandInput: string, mandate: Mandate): BashAnalysis {
+  const rawCommand = toCommandString(rawCommandInput);
   const normalized = normalizeCommand(rawCommand);
   const violations: Violation[] = [];
 
@@ -301,7 +338,9 @@ export function analyzeBashCommand(rawCommand: string, mandate: Mandate): BashAn
   for (const interp of INTERPRETER_PATTERNS) {
     const match = rawCommand.match(interp.pattern);
     if (match) {
-      const scriptBody = match[4];
+      const scriptBody = match[4] || "";
+      if (!scriptBody) continue;
+
       // Normalize string concatenations and implicit string literals inside script body
       // to defeat string-fragmentation evasions: 'r'+'m' -> 'rm', "r" + "m" -> "rm", 'r' 'm' -> 'rm'
       const normalizedScript = scriptBody
@@ -379,6 +418,27 @@ export function analyzeBashCommand(rawCommand: string, mandate: Mandate): BashAn
       violations.push({
         ...v,
         description: `Decoded payload violation: ${v.description}`,
+      });
+    }
+  }
+
+  // Also inspect inside decoded hex if present
+  const decodedHex = extractAndDecodeHex(rawCommand);
+  if (decodedHex) {
+    violations.push({
+      signature: "S3",
+      type: "OBFUSCATION_BYPASS",
+      severity: "CRITICAL",
+      description: `Hidden hex-encoded payload detected: "${decodedHex.slice(0, 80)}"`,
+      evidence: rawCommand.slice(0, 100),
+      remediation: "Disclose all commands transparently in plaintext.",
+    });
+
+    const innerHexAnalysis = analyzeBashCommand(decodedHex, mandate);
+    for (const v of innerHexAnalysis.violations) {
+      violations.push({
+        ...v,
+        description: `Decoded hex payload violation: ${v.description}`,
       });
     }
   }
