@@ -25,6 +25,7 @@ const SENSITIVE_PATH_PATTERNS = [
   /(^|\s|\/)~?\.?kube\/config(\s|$)/i,
   /(^|\s|\/)~?\.?npmrc(\s|$)/i,
   /(^|\s|\/)~?\.?netrc(\s|$)/i,
+  /(^|\s|\/)~?\.?pgpass(\s|$)/i,
   /(^|\s|\/)\/etc\/(shadow|passwd|master\.passwd|sudoers)(\s|$)/i,
   /(^|\s|\/)\/proc\/kcore(\s|$)/i,
 ];
@@ -216,8 +217,12 @@ const EXFILTRATION_PATTERNS: Array<{
     description: "Outbound HTTP file transmission / exfiltration pattern",
   },
   {
-    pattern: /\b(nc|ncat|netcat|socat)\s+(-[a-z]*e[a-z]*\s+|\S+\s+\d+|[A-Z0-9]+:[^\s]+)/i,
-    description: "Netcat or socat reverse shell / raw network exfiltration channel",
+    pattern: /\b(nc|ncat|netcat)\s+[^\n;&|]*(-[a-z]*[ec][a-z]*\s+|\b\S+\s+\d+)/i,
+    description: "Netcat reverse shell / raw network exfiltration channel",
+  },
+  {
+    pattern: /\bsocat\s+[^\n;&|]*?\b([a-z0-9_-]+:[^\s]+)/i,
+    description: "Socat reverse shell / raw socket exfiltration channel",
   },
 ];
 
@@ -230,12 +235,17 @@ const MUTATION_PATTERNS = [
 // Network indicators (including bash /dev/tcp and /dev/udp pseudo-devices)
 const NETWORK_COMMANDS = /\b(curl|wget|fetch|nc|ncat|netcat|socat|ssh|scp|sftp|rsync|ping|nmap|telnet|dig|nslookup)\b|\/dev\/(?:tcp|udp)\//i;
 
-// Cloud instance metadata patterns directly detectable in shell commands
+// Cloud instance metadata patterns directly detectable in shell commands (dotted, decimal, hex, octal, and IPv6)
 const BASH_METADATA_PATTERNS = [
   /\b169\.254\.169\.254\b/,
   /\bmetadata\.google\.internal\b/i,
   /\b169\.254\.170\.2\b/,
-  /\[::ffff:169\.254\.169\.254\]/i,
+  /\[::ffff:(?:169\.254\.169\.254|[0-9a-f]{1,4}:[0-9a-f]{1,4})\]/i,
+  /\b2852039166\b/,
+  /\b2852039170\b/,
+  /\b0xa9fea9fe\b/i,
+  /\b0xa9\.0xfe\.0xa9\.0xfe\b/i,
+  /\b0251\.0376\.0251\.0376\b/,
 ];
 
 export interface BashAnalysis {
@@ -581,6 +591,32 @@ export function analyzeBashCommand(rawCommandInput: string, mandate: Mandate): B
           ...v,
           description: `Command network URL violation: ${v.description}`,
         });
+      }
+    }
+  }
+
+  // Scan for candidate network targets (e.g. scheme-less URLs, IPs, metadata endpoints) under network utilities
+  if (/\b(curl|wget|fetch)\b/i.test(normalized) || /\b(curl|wget|fetch)\b/i.test(rawCommand)) {
+    const tokens = [...normalized.split(/\s+/), ...rawCommand.split(/\s+/)];
+    for (const token of tokens) {
+      if (!token || token.startsWith("-") || /^(curl|wget|fetch)$/i.test(token)) continue;
+      if (
+        token.includes("/") ||
+        token.includes(":") ||
+        /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(token) ||
+        /^0x[0-9a-fA-F]+$/i.test(token) ||
+        /^\d{8,10}$/.test(token) ||
+        token.includes("metadata.google.internal")
+      ) {
+        const urlRes = analyzeUrl(token, mandate);
+        for (const v of urlRes.violations) {
+          if (!violations.some((existing) => existing.type === v.type && existing.description === v.description)) {
+            violations.push({
+              ...v,
+              description: `Command network target violation: ${v.description}`,
+            });
+          }
+        }
       }
     }
   }

