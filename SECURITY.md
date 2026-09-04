@@ -36,4 +36,18 @@ If you discover an evasion technique, privilege escalation vector, or security d
 - A substitute for OS-level sandboxing, container isolation (Docker, gVisor, Firecracker), or kernel-enforced permission barriers (AppArmor, SELinux).
 - A guaranteed defense against every theoretical ambiguity in a Turing-complete shell without OS isolation.
 
+### DNS Resolution & Attacker-Controlled Hostnames (SSRF / DNS Rebinding Boundary)
+
+Aletheia inspects literal URLs, IP literals (IPv4, IPv6, IPv4-mapped IPv6, and obfuscated octal/hex encodings), and known cloud metadata hostnames directly from tool input arguments. Aletheia purposefully does **not** perform synchronous, out-of-band DNS resolution on arbitrary domains (e.g. resolving `attacker-domain.example` to check whether its A/AAAA record points to `169.254.169.254` or `127.0.0.1`).
+
+Doing so would:
+1. Violate Aletheia's sub-millisecond determinism guarantee (<20 µs p99) by introducing unbounded network I/O latency.
+2. Introduce Time-of-Check to Time-of-Use (TOCTOU) DNS rebinding vulnerabilities where the IP resolved by Aletheia differs from the IP contacted by the downstream runtime tool.
+3. Potentially trigger attacker-monitored DNS canary exfiltration channels during the check itself.
+
+**Defense-in-depth requirement**: Protection against DNS rebinding attacks targeting private infrastructure or cloud metadata services must be enforced at the OS and network layers:
+- Egress firewall rules (e.g. iptables/nftables dropping outbound packets to `169.254.169.254` except for authorized system daemons).
+- AWS IMDSv2 hop-limit constraints (`HttpPutResponseHopLimit=1` to prevent container bridge forwarding).
+- An egress forward proxy (e.g. Envoy, Squid, Smokescreen) that pins and validates resolved IP addresses before establishing TCP connections.
+
 We strongly advise deploying `aletheia-mcp` as part of a **defense-in-depth architecture** alongside least-privilege system users and containerized execution environments.

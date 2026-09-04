@@ -5,7 +5,7 @@
 [![MCP Compliant](https://img.shields.io/badge/MCP-Protocol%20Compliant-blue.svg)](https://modelcontextprotocol.io)
 [![Latency](https://img.shields.io/badge/p99%20Latency-9.0%C2%A0%C2%B5s-brightgreen.svg)](#performance-benchmarks)
 [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/Tests-60%20passed-success.svg)](test/s3-scope.test.ts)
+[![Tests](https://img.shields.io/badge/Tests-63%20passed-success.svg)](test/s3-scope.test.ts)
 
 Aletheia MCP intercepts tool calls from Claude, Claude Code, and autonomous agents before execution, scores them against **Signature S3 (Scope Creep Beyond Mandate)** and **Signature S2b (Adversarial Prompt Injection)**, and blocks destructive actions with **sub-millisecond (<10 µs) overhead**.
 

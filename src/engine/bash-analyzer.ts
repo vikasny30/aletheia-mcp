@@ -168,7 +168,9 @@ const INTERPRETER_PATTERNS = [
 const DANGEROUS_INTERPRETER_CALLS = [
   { pattern: /\b(os\.)?system\s*\(/i, description: "System shell execution (.system)" },
   { pattern: /\b(os\.)?popen\s*\(/i, description: "System shell pipe (.popen)" },
-  { pattern: /__import__\s*\(['"]os['"]\)/i, description: "Dynamic OS module import (__import__)" },
+  { pattern: /\bfrom\s+os\s+import\s+[^;]*(\*|\b(system|popen|exec|spawn)\b)/i, description: "OS module shell execution import (from os import)" },
+  { pattern: /\bfrom\s+subprocess\s+import\b/i, description: "Subprocess module execution import (from subprocess import)" },
+  { pattern: /__import__\s*\(['"](os|subprocess)['"]\)/i, description: "Dynamic OS/subprocess module import (__import__)" },
   { pattern: /importlib/i, description: "Dynamic module import (importlib)" },
   { pattern: /subprocess\.(run|Popen|call|check_output)\s*\(/i, description: "Python subprocess execution" },
   { pattern: /shutil\.rmtree\s*\(/i, description: "Python recursive filesystem wipe (shutil.rmtree)" },
@@ -300,9 +302,15 @@ export function analyzeBashCommand(rawCommand: string, mandate: Mandate): BashAn
     const match = rawCommand.match(interp.pattern);
     if (match) {
       const scriptBody = match[4];
-      // Check for dangerous interpreter function calls
+      // Normalize string concatenations and implicit string literals inside script body
+      // to defeat string-fragmentation evasions: 'r'+'m' -> 'rm', "r" + "m" -> "rm", 'r' 'm' -> 'rm'
+      const normalizedScript = scriptBody
+        .replace(/['"]\s*\+\s*['"]/g, "")
+        .replace(/['"][ \t]+['"]/g, "");
+
+      // Check for dangerous interpreter function calls in both raw and normalized script
       for (const danger of DANGEROUS_INTERPRETER_CALLS) {
-        if (danger.pattern.test(scriptBody)) {
+        if (danger.pattern.test(scriptBody) || danger.pattern.test(normalizedScript)) {
           violations.push({
             signature: "S3",
             type: "INTERPRETER_ESCAPE_EXECUTION",
@@ -315,9 +323,16 @@ export function analyzeBashCommand(rawCommand: string, mandate: Mandate): BashAn
         }
       }
 
-      // Recursively extract all quoted strings in script body and analyze each
-      const innerStrings = [...scriptBody.matchAll(/['"]([^'"]+)['"]/g)].map((m) => m[1]);
-      for (const innerStr of innerStrings) {
+      // Recursively extract all unique quoted strings from both raw and normalized script body and analyze each
+      const candidateStrings = new Set<string>();
+      for (const m of scriptBody.matchAll(/['"]([^'"]+)['"]/g)) {
+        candidateStrings.add(m[1]);
+      }
+      for (const m of normalizedScript.matchAll(/['"]([^'"]+)['"]/g)) {
+        candidateStrings.add(m[1]);
+      }
+
+      for (const innerStr of candidateStrings) {
         if (innerStr.trim().length > 1) {
           const innerAnalysis = analyzeBashCommand(innerStr, mandate);
           for (const v of innerAnalysis.violations) {

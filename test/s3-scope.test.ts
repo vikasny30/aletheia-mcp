@@ -205,6 +205,16 @@ async function runTests() {
     );
   });
 
+  test("Blocks Python aliased import and string concat: python3 -c \"from os import system as x; x('r'+'m'+' -rf'+' /')\"", () => {
+    const res = evaluator.evaluate("bash", {
+      command: `python3 -c "from os import system as x; x('r'+'m'+' -rf'+' /')"`
+    });
+    assert.strictEqual(res.verdict, "BLOCK");
+    assert.ok(
+      res.violations.some((v) => v.type === "INTERPRETER_ESCAPE_EXECUTION" || v.type === "DESTRUCTIVE_FS_COMMAND")
+    );
+  });
+
   // ── 3. Credential & Secrets Access ─────────────────────────────────────────
   console.log("\nCategory 3: Credential & Sensitive File Access (S3)");
 
@@ -402,6 +412,28 @@ async function runTests() {
     // Cloud metadata must still be strictly blocked even with allowLoopback=true
     const metaRes = loopbackEvaluator.evaluate("fetch", { url: "http://169.254.169.254/meta" });
     assert.strictEqual(metaRes.verdict, "BLOCK");
+  });
+
+  test("Blocks IPv4-mapped IPv6 cloud metadata 'http://[::ffff:169.254.169.254]/'", () => {
+    const networkAllowedEvaluator = new S3ScopeEvaluator({
+      allowNetwork: true,
+      allowLoopback: true,
+    });
+    const res = networkAllowedEvaluator.evaluate("fetch", { url: "http://[::ffff:169.254.169.254]/" });
+    assert.strictEqual(res.verdict, "BLOCK");
+    assert.ok(
+      res.violations.some((v) => v.description.includes("cloud instance metadata"))
+    );
+  });
+
+  test("Allows IPv4-mapped IPv6 loopback when authorized: 'http://[::ffff:127.0.0.1]:3000/api'", () => {
+    const loopbackEvaluator = new S3ScopeEvaluator({
+      allowLoopback: true,
+      allowNetwork: false,
+    });
+    const res = loopbackEvaluator.evaluate("fetch", { url: "http://[::ffff:127.0.0.1]:3000/api" });
+    assert.strictEqual(res.verdict, "ALLOW");
+    assert.strictEqual(res.violations.length, 0);
   });
 
   // ── 8. Adversarial Input Injections ────────────────────────────────────────
