@@ -161,14 +161,38 @@ async function runTests() {
     assert.ok(res.violations.some((v) => v.type === "DESTRUCTIVE_FS_COMMAND"));
   });
 
+  test("Blocks $IFS$9 positional parameter evasion: \"rm$IFS$9-rf$IFS$9/\"", () => {
+    const res = evaluator.evaluate("bash", { command: "rm$IFS$9-rf$IFS$9/" });
+    assert.strictEqual(res.verdict, "BLOCK");
+    assert.ok(res.violations.some((v) => v.type === "DESTRUCTIVE_FS_COMMAND"));
+  });
+
   test("Blocks brace expansion destructive delete: \"rm -rf /{etc,usr,home}\"", () => {
     const res = evaluator.evaluate("bash", { command: "rm -rf /{etc,usr,home}" });
     assert.strictEqual(res.verdict, "BLOCK");
     assert.ok(res.violations.some((v) => v.type === "DESTRUCTIVE_FS_COMMAND"));
   });
 
+  test("Blocks single-brace expansion evasion: \"rm -rf /{etc}\"", () => {
+    const res = evaluator.evaluate("bash", { command: "rm -rf /{etc}" });
+    assert.strictEqual(res.verdict, "BLOCK");
+    assert.ok(res.violations.some((v) => v.type === "DESTRUCTIVE_FS_COMMAND"));
+  });
+
   test("Blocks subshell wrapped destructive delete: \"(rm -rf /)\"", () => {
     const res = evaluator.evaluate("bash", { command: "(rm -rf /)" });
+    assert.strictEqual(res.verdict, "BLOCK");
+    assert.ok(res.violations.some((v) => v.type === "DESTRUCTIVE_FS_COMMAND"));
+  });
+
+  test("Blocks backtick wrapped destructive delete: \"echo `rm -rf /`\"", () => {
+    const res = evaluator.evaluate("bash", { command: "echo `rm -rf /`" });
+    assert.strictEqual(res.verdict, "BLOCK");
+    assert.ok(res.violations.some((v) => v.type === "DESTRUCTIVE_FS_COMMAND"));
+  });
+
+  test("Blocks double-parentheses subshell delete: \"((rm -rf /))\"", () => {
+    const res = evaluator.evaluate("bash", { command: "((rm -rf /))" });
     assert.strictEqual(res.verdict, "BLOCK");
     assert.ok(res.violations.some((v) => v.type === "DESTRUCTIVE_FS_COMMAND"));
   });
@@ -271,6 +295,23 @@ async function runTests() {
     );
   });
 
+  test("Blocks self-mandate path loosening ({ allowedPaths: ['/'] }) without operatorSecret", () => {
+    const res = evaluator.setMandate({ allowedPaths: ["/"] });
+    assert.strictEqual(res.success, false);
+    assert.ok(res.error?.includes("Self-mandate escalation blocked"));
+  });
+
+  test("Blocks clearing disallowedTools without operatorSecret", () => {
+    // First tighten by adding a disallowed tool
+    evaluator.setMandate({ disallowedTools: ["rm", "eval"] });
+    // Now attempt to loosen/clear disallowedTools without secret
+    const res = evaluator.setMandate({ disallowedTools: [] });
+    assert.strictEqual(res.success, false);
+    assert.ok(res.error?.includes("Self-mandate escalation blocked"));
+    // Clean up with authorized secret
+    evaluator.setMandate({ disallowedTools: [] }, "super-secret-admin-key");
+  });
+
   // ── 6. SQL Safety (Including Tautological Predicates & Comment Splitting) ──
   console.log("\nCategory 6: SQL Query Safety (S3)");
 
@@ -282,6 +323,12 @@ async function runTests() {
 
   test("Blocks SQL inline comment splitting: \"DR/**/OP TABLE users;\"", () => {
     const res = evaluator.evaluate("sql", { query: "DR/**/OP TABLE users;" });
+    assert.strictEqual(res.verdict, "BLOCK");
+    assert.ok(res.violations.some((v) => v.type === "DESTRUCTIVE_SQL_DDL"));
+  });
+
+  test("Blocks SQL comment delimited query: \"DROP/**/TABLE users;\"", () => {
+    const res = evaluator.evaluate("sql", { query: "DROP/**/TABLE users;" });
     assert.strictEqual(res.verdict, "BLOCK");
     assert.ok(res.violations.some((v) => v.type === "DESTRUCTIVE_SQL_DDL"));
   });

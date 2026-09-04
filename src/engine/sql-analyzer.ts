@@ -48,34 +48,39 @@ export interface SqlAnalysis {
 
 export function analyzeSqlQuery(rawSql: string, mandate: Mandate): SqlAnalysis {
   // Strip inline SQL comments:
-  // 1. Collapse split keywords: DR/**/OP -> DROP
-  let stripped = rawSql.replace(/([a-zA-Z0-9_])\/\*[\s\S]*?\*\/([a-zA-Z0-9_])/g, "$1$2");
-  // 2. Replace remaining multi-line and single-line comments with spaces
-  stripped = stripped.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/--.*$/gm, " ");
-  const normalized = stripped.trim().replace(/\s+/g, " ");
+  // 1. Remove single-line comments (-- ...)
+  const noSingleLine = rawSql.replace(/--.*$/gm, " ");
+
+  // 2. Representation A (spaced - ANSI SQL standard delimiter): comments become spaces
+  const repSpace = noSingleLine.replace(/\/\*[\s\S]*?\*\//g, " ").trim().replace(/\s+/g, " ");
+
+  // 3. Representation B (collapsed): comments collapsed to catch keyword splitting like DR/**/OP
+  const repCollapsed = noSingleLine.replace(/\/\*[\s\S]*?\*\//g, "").trim().replace(/\s+/g, " ");
+
+  const normalized = repSpace;
   const violations: Violation[] = [];
 
-  // Determine statement type
+  // Determine statement type (check both representations)
   let statementType: SqlAnalysis["statementType"] = "UNKNOWN";
-  if (/^SELECT\b/i.test(normalized)) statementType = "SELECT";
-  else if (/^INSERT\b/i.test(normalized)) statementType = "INSERT";
-  else if (/^UPDATE\b/i.test(normalized)) statementType = "UPDATE";
-  else if (/^DELETE\b/i.test(normalized)) statementType = "DELETE";
-  else if (/^(CREATE|ALTER|DROP|TRUNCATE)\b/i.test(normalized)) statementType = "DDL";
+  if (/^SELECT\b/i.test(repSpace) || /^SELECT\b/i.test(repCollapsed)) statementType = "SELECT";
+  else if (/^INSERT\b/i.test(repSpace) || /^INSERT\b/i.test(repCollapsed)) statementType = "INSERT";
+  else if (/^UPDATE\b/i.test(repSpace) || /^UPDATE\b/i.test(repCollapsed)) statementType = "UPDATE";
+  else if (/^DELETE\b/i.test(repSpace) || /^DELETE\b/i.test(repCollapsed)) statementType = "DELETE";
+  else if (/^(CREATE|ALTER|DROP|TRUNCATE)\b/i.test(repSpace) || /^(CREATE|ALTER|DROP|TRUNCATE)\b/i.test(repCollapsed)) statementType = "DDL";
 
-  const isWriteAttempt = WRITE_STATEMENTS.test(normalized) || statementType === "DDL";
-  const hasWhereClause = /\bWHERE\b/i.test(normalized);
-  const isTautological = hasWhereClause && TAUTOLOGICAL_WHERE_PATTERN.test(normalized);
+  const isWriteAttempt = WRITE_STATEMENTS.test(repSpace) || WRITE_STATEMENTS.test(repCollapsed) || statementType === "DDL";
+  const hasWhereClause = /\bWHERE\b/i.test(repSpace) || /\bWHERE\b/i.test(repCollapsed);
+  const isTautological = hasWhereClause && (TAUTOLOGICAL_WHERE_PATTERN.test(repSpace) || TAUTOLOGICAL_WHERE_PATTERN.test(repCollapsed));
 
-  // 1. Check for Destructive DDL (DROP, TRUNCATE)
+  // 1. Check for Destructive DDL (DROP, TRUNCATE) across both representations
   for (const { pattern, description } of DESTRUCTIVE_DDL_PATTERNS) {
-    if (pattern.test(normalized)) {
+    if (pattern.test(repSpace) || pattern.test(repCollapsed)) {
       violations.push({
         signature: "S3",
         type: "DESTRUCTIVE_SQL_DDL",
         severity: "CRITICAL",
         description,
-        evidence: normalized.slice(0, 100),
+        evidence: (pattern.test(repSpace) ? repSpace : repCollapsed).slice(0, 100),
         remediation: "Destructive schema and data drops are blocked in agent execution mode.",
       });
     }
@@ -108,23 +113,24 @@ export function analyzeSqlQuery(rawSql: string, mandate: Mandate): SqlAnalysis {
     });
   }
 
-  // 3. Check for Privilege Escalation / User tampering
+  // 3. Check for Privilege Escalation / User tampering across both representations
   for (const pattern of PRIVILEGE_PATTERNS) {
-    if (pattern.test(normalized)) {
+    if (pattern.test(repSpace) || pattern.test(repCollapsed)) {
       violations.push({
         signature: "S3",
         type: "PRIVILEGE_ESCALATION",
         severity: "CRITICAL",
         description: "SQL user privilege manipulation attempt",
-        evidence: normalized.slice(0, 100),
+        evidence: (pattern.test(repSpace) ? repSpace : repCollapsed).slice(0, 100),
         remediation: "Agents are not permitted to grant roles, create users, or alter security attributes.",
       });
       break;
     }
   }
 
-  // 4. Check Multi-statement injection attempt (; followed by DDL/DML)
-  if (/;\s*(DROP|DELETE|TRUNCATE|UPDATE|INSERT|GRANT|ALTER)\b/i.test(normalized)) {
+  // 4. Check Multi-statement injection attempt (; followed by DDL/DML) across both representations
+  const chainedPattern = /;\s*(DROP|DELETE|TRUNCATE|UPDATE|INSERT|GRANT|ALTER)\b/i;
+  if (chainedPattern.test(repSpace) || chainedPattern.test(repCollapsed)) {
     violations.push({
       signature: "S3",
       type: "DESTRUCTIVE_SQL_DDL",

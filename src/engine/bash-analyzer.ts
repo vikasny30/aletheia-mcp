@@ -35,12 +35,12 @@ const DESTRUCTIVE_SIGNATURES: Array<{
   type: Violation["type"];
 }> = [
   {
-    pattern: /\brm\s+(-[a-z]*[rf][a-z]*\s+)+(\/|\/\*|~|\$HOME|\.\.?|\*|\.\/\*|\/tmp\/\*|\/etc|\/usr)(?=[\s;)&|}>]|$)/i,
+    pattern: /\brm\s+(-[a-z]*[rf][a-z]*\s+)+(\/+|\/\*|~\/?|\$HOME\/?|(\.\.|\.)\/?|\*|\.\/\*|\/tmp\/\*|\/etc\/?|\/usr\/?)(?![\w\-\/])/i,
     description: "Unbounded filesystem recursive delete (rm -rf root / home / wildcard)",
     type: "DESTRUCTIVE_FS_COMMAND",
   },
   {
-    pattern: /\brm\s+-[a-z]*[rf][a-z]*\s+(\/|\/\*|~|\*|\.)(?=[\s;)&|}>]|$)/i,
+    pattern: /\brm\s+-[a-z]*[rf][a-z]*\s+(\/+|\/\*|~\/?|\*|\.|\/etc\/?|\/usr\/?)(?![\w\-\/])/i,
     description: "Recursive delete of root, wildcard, or home",
     type: "DESTRUCTIVE_FS_COMMAND",
   },
@@ -223,15 +223,13 @@ export function normalizeCommand(raw: string): string {
   let cleaned = raw.trim().replace(/\0/g, "");
 
   // 1. Substitute shell $IFS word-splitting primitive ($IFS, ${IFS}) with a space
-  cleaned = cleaned.replace(/\$(IFS\b|\{IFS\})/g, " ");
+  // Also handle positional disambiguators like $IFS$9, $IFS$1, ${IFS}$9
+  cleaned = cleaned.replace(/\$(?:IFS\b|\{IFS\})(?:\$[0-9*@#?!\-])*/g, " ");
 
-  // 2. Expand simple brace expansions: e.g. /{etc,usr,home} -> /etc /usr /home
-  cleaned = cleaned.replace(/([^\s]+)\{([^{}]+)\}([^\s]*)/g, (match, prefix, inner, suffix) => {
+  // 2. Expand brace expansions: e.g. /{etc,usr,home} -> /etc /usr /home or /{etc} -> /etc
+  cleaned = cleaned.replace(/(\S*)\{([^{}\s]+)\}(\S*)/g, (_match, prefix, inner, suffix) => {
     const items = inner.split(",");
-    if (items.length > 1) {
-      return items.map((item: string) => `${prefix}${item}${suffix}`).join(" ");
-    }
-    return match;
+    return items.map((item: string) => `${prefix}${item.trim()}${suffix}`).join(" ");
   });
 
   // 3. Unescape backslashes before characters (e.g. \r\m -> rm)

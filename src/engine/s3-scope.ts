@@ -6,6 +6,7 @@
  * and monotonic self-mandate escalation protection.
  */
 
+import path from "node:path";
 import { performance } from "node:perf_hooks";
 import {
   Mandate,
@@ -20,6 +21,75 @@ import { analyzeSqlQuery } from "./sql-analyzer.js";
 import { analyzePath } from "./fs-analyzer.js";
 import { analyzeUrl } from "./network-analyzer.js";
 import { analyzeAdversarialInput } from "./s2b-injection.js";
+
+/**
+ * Checks if a requested mandate update or override attempts to loosen safety boundaries.
+ */
+export function isLooseningMandate(
+  current: Mandate,
+  requested: Partial<Mandate>
+): boolean {
+  // 1. Boolean capability flags
+  if (requested.allowWrite === true && !current.allowWrite) return true;
+  if (requested.allowDestructive === true && !current.allowDestructive) return true;
+  if (requested.allowNetwork === true && !current.allowNetwork) return true;
+  if (requested.allowSubshells === true && !current.allowSubshells) return true;
+
+  // 2. Risk tolerance loosening
+  const riskLevels: Record<string, number> = { low: 1, medium: 2, high: 3 };
+  if (
+    requested.riskTolerance &&
+    riskLevels[requested.riskTolerance] > riskLevels[current.riskTolerance]
+  ) {
+    return true;
+  }
+
+  // 3. allowedPaths: any path that is not contained within current allowed paths is loosening
+  if (Array.isArray(requested.allowedPaths)) {
+    if (requested.allowedPaths.includes("*") && !current.allowedPaths.includes("*")) {
+      return true;
+    }
+    for (const reqPath of requested.allowedPaths) {
+      if (reqPath === "*" && !current.allowedPaths.includes("*")) return true;
+      const resolvedReq = path.resolve(reqPath);
+      const isSubpath = current.allowedPaths.some((currPath) => {
+        if (currPath === "*") return true;
+        const resolvedCurr = path.resolve(currPath);
+        const rel = path.relative(resolvedCurr, resolvedReq);
+        return !rel.startsWith("..") && !path.isAbsolute(rel);
+      });
+      if (!isSubpath) return true; // Escaping existing path boundary
+    }
+  }
+
+  // 4. disallowedTools: removing or clearing any previously disallowed tool is loosening
+  if (
+    requested.disallowedTools !== undefined &&
+    current.disallowedTools &&
+    current.disallowedTools.length > 0
+  ) {
+    if (!Array.isArray(requested.disallowedTools)) return true;
+    for (const tool of current.disallowedTools) {
+      if (!requested.disallowedTools.includes(tool)) return true;
+    }
+  }
+
+  // 5. allowedTools: adding new tools when restricted is loosening
+  if (
+    requested.allowedTools !== undefined &&
+    current.allowedTools &&
+    !current.allowedTools.includes("*")
+  ) {
+    if (!Array.isArray(requested.allowedTools) || requested.allowedTools.includes("*")) {
+      return true;
+    }
+    for (const tool of requested.allowedTools) {
+      if (!current.allowedTools.includes(tool)) return true;
+    }
+  }
+
+  return false;
+}
 
 // Default conservative mandate for autonomous agents
 export const DEFAULT_MANDATE: Mandate = {
@@ -70,26 +140,17 @@ export class S3ScopeEvaluator {
     newMandate: Partial<Mandate>,
     callerSecret?: string
   ): { success: boolean; mandate: Mandate; error?: string } {
-    const current = this.mandate;
-    const isLoosening =
-      (newMandate.allowWrite === true && !current.allowWrite) ||
-      (newMandate.allowDestructive === true && !current.allowDestructive) ||
-      (newMandate.allowNetwork === true && !current.allowNetwork) ||
-      (newMandate.allowSubshells === true && !current.allowSubshells) ||
-      (newMandate.riskTolerance === "high" && current.riskTolerance !== "high") ||
-      (Array.isArray(newMandate.allowedPaths) &&
-        newMandate.allowedPaths.includes("*") &&
-        !current.allowedPaths.includes("*"));
+    const isLoosening = isLooseningMandate(this.mandate, newMandate);
 
-    if (isLoosening && current.isLocked) {
+    if (isLoosening && this.mandate.isLocked) {
       const expectedSecret =
-        current.operatorSecret || process.env.ALETHEIA_OPERATOR_SECRET;
+        this.mandate.operatorSecret || process.env.ALETHEIA_OPERATOR_SECRET;
       if (!expectedSecret || callerSecret !== expectedSecret) {
         return {
           success: false,
           mandate: { ...this.mandate },
           error:
-            "Self-mandate escalation blocked: agents cannot grant themselves write, destructive, or network permissions without valid operatorSecret.",
+            "Self-mandate escalation blocked: agents cannot grant themselves looser permissions, broader paths, or clear disallowed tools without valid operatorSecret.",
         };
       }
     }
@@ -129,16 +190,7 @@ export class S3ScopeEvaluator {
     let effectiveMandate = this.mandate;
 
     if (sessionOverride) {
-      // Check if sessionOverride attempts to loosen permissions
-      const isLoosening =
-        (sessionOverride.allowWrite === true && !this.mandate.allowWrite) ||
-        (sessionOverride.allowDestructive === true && !this.mandate.allowDestructive) ||
-        (sessionOverride.allowNetwork === true && !this.mandate.allowNetwork) ||
-        (sessionOverride.allowSubshells === true && !this.mandate.allowSubshells) ||
-        (sessionOverride.riskTolerance === "high" && this.mandate.riskTolerance !== "high") ||
-        (Array.isArray(sessionOverride.allowedPaths) &&
-          sessionOverride.allowedPaths.includes("*") &&
-          !this.mandate.allowedPaths.includes("*"));
+      const isLoosening = isLooseningMandate(this.mandate, sessionOverride);
 
       if (isLoosening && this.mandate.isLocked) {
         const expectedSecret =
@@ -151,7 +203,7 @@ export class S3ScopeEvaluator {
             type: "UNAUTHORIZED_MANDATE_ESCALATION",
             severity: "CRITICAL",
             description:
-              "Unauthorized mandate override attempt: tool calls cannot self-grant looser permissions without a valid operatorSecret.",
+              "Unauthorized mandate override attempt: tool calls cannot self-grant looser permissions, broader paths, or clear disallowed tools without a valid operatorSecret.",
             evidence: JSON.stringify(sessionOverride),
             remediation:
               "Mandate overrides in aletheia_intercept are only permitted to tighten boundaries, not loosen them.",
@@ -164,6 +216,8 @@ export class S3ScopeEvaluator {
           delete sanitized.allowSubshells;
           delete sanitized.riskTolerance;
           delete sanitized.allowedPaths;
+          delete sanitized.disallowedTools;
+          delete sanitized.allowedTools;
           effectiveMandate = { ...this.mandate, ...sanitized };
         } else {
           effectiveMandate = { ...this.mandate, ...sessionOverride };
