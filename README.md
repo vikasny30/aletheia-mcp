@@ -2,7 +2,7 @@
 
 > **Sub-millisecond runtime safety & scope creep (Signature S3) filter for AI agent tool calls.**
 
-[![MCP Compliant](https://img.shields.io/badge/MCP-Protocol%202024--11--05-blue.svg)](https://modelcontextprotocol.io)
+[![MCP Compliant](https://img.shields.io/badge/MCP-Protocol%20Compliant-blue.svg)](https://modelcontextprotocol.io)
 [![Latency](https://img.shields.io/badge/p99%20Latency-9.0%C2%A0%C2%B5s-brightgreen.svg)](#performance-benchmarks)
 [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/Tests-55%20passed-success.svg)](test/s3-scope.test.ts)
