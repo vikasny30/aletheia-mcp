@@ -3,13 +3,23 @@
 > **Sub-millisecond runtime safety & scope creep (Signature S3) filter for AI agent tool calls.**
 
 [![MCP Compliant](https://img.shields.io/badge/MCP-Protocol%202024--11--05-blue.svg)](https://modelcontextprotocol.io)
-[![Latency](https://img.shields.io/badge/p99%20Latency-10.4%C2%A0%C2%B5s-brightgreen.svg)](#performance-benchmarks)
+[![Latency](https://img.shields.io/badge/p99%20Latency-9.0%C2%A0%C2%B5s-brightgreen.svg)](#performance-benchmarks)
 [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/Tests-42%20passed-success.svg)](test/s3-scope.test.ts)
+[![Tests](https://img.shields.io/badge/Tests-55%20passed-success.svg)](test/s3-scope.test.ts)
 
-Aletheia MCP intercepts tool calls from Claude, Claude Code, and autonomous agents before execution, scores them against **Signature S3 (Scope Creep Beyond Mandate)** and **Signature S2b (Adversarial Prompt Injection)**, and blocks destructive actions with **sub-millisecond (<15 µs) overhead**.
+Aletheia MCP intercepts tool calls from Claude, Claude Code, and autonomous agents before execution, scores them against **Signature S3 (Scope Creep Beyond Mandate)** and **Signature S2b (Adversarial Prompt Injection)**, and blocks destructive actions with **sub-millisecond (<10 µs) overhead**.
 
 Derived from the [Aletheia Behavioral Observability Framework](https://github.com/vikasny30/aletheia), validated against **2,571 real-world AI failure incidents** from AIID, AVID, and the MIT AI Risk Repository.
+
+---
+
+## Security Model: Defense-in-Depth, Not a Sandbox
+
+Aletheia MCP provides **deterministic, high-performance lexical, syntactic, and structural filtering in single-digit microseconds**. It neutralizes obfuscation, token quote-splitting, shell variable indirection, interpreter escapes, dual-representation SQL comment tricks, and monotonic self-mandate escalation before tools execute.
+
+> [!IMPORTANT]
+> **Defense-in-Depth vs. Isolation**:
+> Aletheia MCP is an ultra-fast, zero-latency pre-execution gatekeeper designed as a critical layer in a defense-in-depth posture. Lexical analysis against a Turing-complete shell has inherent theoretical asymptotes; Aletheia MCP is **not a substitute** for operating autonomous agents with least-privilege credentials, non-root system users, scoped database grants, and containerized or VM-level sandboxes (e.g., Docker, gVisor, Firecracker). Optimal security combines Aletheia at the MCP tool boundary with OS/network-level sandboxing.
 
 ---
 
@@ -30,11 +40,14 @@ Existing defenses rely on LLM-as-a-judge evaluators that add **1,500–3,000 ms*
 
 ## Key Features
 
-- **⚡ Sub-Millisecond (<15 µs p99) Overhead**: Over 270,000 evaluations per second. Zero perceived latency in agent loops.
+- **⚡ Sub-Millisecond (<10 µs p99) Overhead**: Over 270,000 evaluations per second. Zero perceived latency in agent loops.
 - **🛡️ Monotonic Mandate Escalation Guard**: Prevents autonomous agents from self-granting write, destructive, or network permissions. Mandates can be tightened voluntarily, but loosening requires an `operatorSecret`.
 - **🎯 Evasion-Hardened Engine**:
   - **Quote & Backslash Stripping**: Defeats split-token evasion (`r'm' -rf /`, `r\m -rf /`).
   - **Variable Indirection**: Resolves shell variable substitutions (`X=rm; $X -rf /`).
+  - **Positional Parameter & IFS Normalization**: Neutralizes `$IFS$9` word-splitting.
+  - **Brace Expansion Resolution**: Expands `{etc,usr}` and single `{etc}` patterns.
+  - **Dual-Representation SQL Analysis**: Defeats inline comment evasion (`DROP/**/TABLE` and `DR/**/OP`).
   - **Interpreter Escape Interception**: Recursively parses code passed via `-c`/`-e` flags in `python`, `node`, `perl`, `ruby`, `php`, and `sh`.
   - **Generalized Fork Bombs**: Detects recursive piped background processes across arbitrary function identifiers.
   - **SetUID Privilege Elevation**: Halts `chmod u+s`, `chmod 4755`, and privilege tampering.
@@ -54,10 +67,10 @@ Measured on 10,000 consecutive multi-domain evaluations (Bash de-obfuscation, SQ
 
 | Metric | Measured Value | Target |
 | :--- | :--- | :--- |
-| **p50 (Median)** | **0.0032 ms (3.2 µs)** | < 0.500 ms |
-| **p95 Latency** | **0.0057 ms (5.7 µs)** | < 0.800 ms |
-| **p99 Latency** | **0.0104 ms (10.4 µs)** | < 1.000 ms |
-| **Throughput** | **270,000+ evals / second** | > 10,000 / s |
+| **p50 (Median)** | **0.0033 ms (3.3 µs)** | < 0.500 ms |
+| **p95 Latency** | **0.0054 ms (5.4 µs)** | < 0.800 ms |
+| **p99 Latency** | **0.0090 ms (9.0 µs)** | < 1.000 ms |
+| **Throughput** | **269,000+ evals / second** | > 10,000 / s |
 | **Hot-Path External APIs**| **0 (Deterministic local engine)** | 0 |
 
 *Run locally via `npm run benchmark`.*
