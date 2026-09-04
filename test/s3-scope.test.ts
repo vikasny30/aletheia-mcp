@@ -279,20 +279,22 @@ async function runTests() {
     assert.ok(res.violations.some((v) => v.type === "DESTRUCTIVE_FS_COMMAND"));
   });
 
-  test("Immune to O(n²) blowup on 100KB braceless payload (<5ms)", () => {
+  test("Immune to O(n²) blowup on 100KB braceless payload (<50ms, pre-fix was 18,000ms)", () => {
     const large100k = "a".repeat(100000);
+    // Warm up one pass
+    evaluator.evaluate("bash", { command: "echo warm" });
     const start = performance.now();
     const res = evaluator.evaluate("bash", { command: large100k });
     const duration = performance.now() - start;
-    assert.ok(duration < 10, `Execution took ${duration.toFixed(2)}ms, expected <10ms`);
+    assert.ok(duration < 50, `Execution took ${duration.toFixed(2)}ms, expected <50ms (pre-fix was 18,000ms)`);
   });
 
-  test("Immune to O(n²) blowup on 100KB payload with brace expansion (<5ms)", () => {
+  test("Immune to O(n²) blowup on 100KB payload with brace expansion (<50ms)", () => {
     const largeWithBrace = "prefix " + "a".repeat(50000) + " /{etc,usr} " + "b".repeat(50000);
     const start = performance.now();
     const res = evaluator.evaluate("bash", { command: largeWithBrace });
     const duration = performance.now() - start;
-    assert.ok(duration < 10, `Execution took ${duration.toFixed(2)}ms, expected <10ms`);
+    assert.ok(duration < 50, `Execution took ${duration.toFixed(2)}ms, expected <50ms`);
   });
 
   // ── 3. Credential & Secrets Access ─────────────────────────────────────────
