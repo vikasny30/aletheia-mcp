@@ -216,8 +216,8 @@ const EXFILTRATION_PATTERNS: Array<{
     description: "Outbound HTTP file transmission / exfiltration pattern",
   },
   {
-    pattern: /\b(nc|ncat|netcat)\s+(-[a-z]*e[a-z]*\s+|\S+\s+\d+)/i,
-    description: "Netcat reverse shell or raw network exfiltration channel",
+    pattern: /\b(nc|ncat|netcat|socat)\s+(-[a-z]*e[a-z]*\s+|\S+\s+\d+|[A-Z0-9]+:[^\s]+)/i,
+    description: "Netcat or socat reverse shell / raw network exfiltration channel",
   },
 ];
 
@@ -228,7 +228,15 @@ const MUTATION_PATTERNS = [
 ];
 
 // Network indicators (including bash /dev/tcp and /dev/udp pseudo-devices)
-const NETWORK_COMMANDS = /\b(curl|wget|fetch|nc|ncat|netcat|ssh|scp|sftp|rsync|ping|nmap|telnet|dig|nslookup)\b|\/dev\/(?:tcp|udp)\//i;
+const NETWORK_COMMANDS = /\b(curl|wget|fetch|nc|ncat|netcat|socat|ssh|scp|sftp|rsync|ping|nmap|telnet|dig|nslookup)\b|\/dev\/(?:tcp|udp)\//i;
+
+// Cloud instance metadata patterns directly detectable in shell commands
+const BASH_METADATA_PATTERNS = [
+  /\b169\.254\.169\.254\b/,
+  /\bmetadata\.google\.internal\b/i,
+  /\b169\.254\.170\.2\b/,
+  /\[::ffff:169\.254\.169\.254\]/i,
+];
 
 export interface BashAnalysis {
   isDestructive: boolean;
@@ -534,7 +542,21 @@ export function analyzeBashCommand(rawCommandInput: string, mandate: Mandate): B
     }
   }
 
-  // 5.5. Check Bash Socket Pseudo-devices (/dev/tcp, /dev/udp) and Command URLs for SSRF / Metadata Access
+  // 5.5. Check Direct Cloud Metadata, Bash Socket Pseudo-devices (/dev/tcp, /dev/udp), and Command URLs for SSRF / Metadata Access
+  for (const metaPattern of BASH_METADATA_PATTERNS) {
+    if (metaPattern.test(rawCommand) || metaPattern.test(normalized)) {
+      violations.push({
+        signature: "S3",
+        type: "UNAUTHORIZED_NETWORK_EGRESS",
+        severity: "CRITICAL",
+        description: "Cloud instance metadata access detected in shell command",
+        evidence: rawCommand.slice(0, 120),
+        remediation: "Requests to cloud metadata endpoints (AWS/GCP/Azure) are strictly prohibited to prevent credential exfiltration.",
+      });
+      break;
+    }
+  }
+
   if (rawCommand.includes("/dev/tcp") || rawCommand.includes("/dev/udp") || normalized.includes("/dev/tcp") || normalized.includes("/dev/udp")) {
     const socketRegex = /\/dev\/(?:tcp|udp)\/([a-zA-Z0-9_.\-\[\]:]+)\/(\d+)/g;
     for (const match of [...rawCommand.matchAll(socketRegex), ...normalized.matchAll(socketRegex)]) {

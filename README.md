@@ -5,7 +5,7 @@
 [![MCP Compliant](https://img.shields.io/badge/MCP-Protocol%20Compliant-blue.svg)](https://modelcontextprotocol.io)
 [![Latency](https://img.shields.io/badge/p99%20Latency-20%C2%A0%C2%B5s-brightgreen.svg)](#performance-benchmarks)
 [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/Tests-90%20passed-success.svg)](test/s3-scope.test.ts)
+[![Tests](https://img.shields.io/badge/Tests-114%20passed-success.svg)](test/s3-scope.test.ts)
 
 Aletheia MCP intercepts tool calls from Claude, Claude Code, and autonomous agents before execution, scores them against **Signature S3 (Scope Creep Beyond Mandate)** and **Signature S2b (Adversarial Prompt Injection)**, and blocks destructive actions with **sub-millisecond (<20 µs) overhead**.
 
@@ -43,6 +43,10 @@ Existing defenses rely on LLM-as-a-judge evaluators that add **1,500–3,000 ms*
 - **⚡ Sub-Millisecond (<20 µs p99) Overhead**: Over 120,000 evaluations per second. Zero perceived latency in agent loops.
 - **🛡️ Monotonic Mandate Escalation Guard**: Prevents autonomous agents from self-granting write, destructive, or network permissions. Mandates can be tightened voluntarily, but loosening requires an `operatorSecret`.
 - **🎯 Evasion-Hardened Engine**:
+  - **Database OS & Filesystem Primitives**: Blocks PostgreSQL `COPY ... PROGRAM`, `pg_read_file()`, `lo_import()`; MySQL `LOAD DATA INFILE`, `INTO OUTFILE`; SQLite `ATTACH DATABASE`; and SQL Server `xp_cmdshell`.
+  - **Scheme-less & Malformed URL SSRF Defense**: Normalizes protocol-relative and scheme-less endpoints (`169.254.169.254/latest`), enforcing strict fail-closed rejection on invalid URLs and direct cloud metadata access under offline mandates.
+  - **Direct Shell Metadata & Network Tool Neutralization**: Scans direct IP references in `curl` / `wget` without URL schemes, and blocks `socat` raw socket exfiltration channels.
+  - **Wildcard Credential & Sensitive Directory Boundaries**: Enforces wildcard protection across all `.env.*` variants (`.env.secrets`, `.env.staging`, `.env.test`) and sensitive config roots (`~/.kube/`, `~/.docker/`, `~/.gnupg/`, `.git-credentials`).
   - **Linear O(N) Normalization**: Token-based non-backtracking brace expansion and bounded parameter resolution ensures sub-millisecond execution on 100KB+ payloads.
   - **Bash Socket Pseudo-Device Interception**: Inspects `/dev/tcp/HOST/PORT` and `/dev/udp/HOST/PORT` redirections, halting cloud metadata SSRF and covert exfiltration channels directly on shell inputs.
   - **SQL CTE & Procedural Block Interception**: Enforces unbounded mutation guards across Common Table Expressions (`WITH ... DELETE`) and PL/pgSQL anonymous blocks (`DO $$ ... $$`).

@@ -398,9 +398,11 @@ export class S3ScopeEvaluator {
 
           // Check if string looks like SQL
           const looksLikeSql =
-            /^\s*(SELECT|INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER|CREATE|GRANT)\b/i.test(
+            /^\s*(SELECT|INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER|CREATE|GRANT|COPY|WITH|DO|ATTACH|EXEC)\b/i.test(
               trimmed
-            );
+            ) ||
+            argKey.toLowerCase().includes("sql") ||
+            argKey.toLowerCase().includes("query");
           if (looksLikeSql) {
             const sqlRes = analyzeSqlQuery(trimmed, effectiveMandate);
             violations.push(...sqlRes.violations);
@@ -423,8 +425,16 @@ export class S3ScopeEvaluator {
             targetPaths.push(fsRes.normalizedPath);
           }
 
-          // Check if string looks like URL
-          if (/^https?:\/\//i.test(trimmed)) {
+          // Check if string looks like URL or network target
+          const looksLikeUrl =
+            /^https?:\/\//i.test(trimmed) ||
+            /^\/\//.test(trimmed) ||
+            argKey.toLowerCase().includes("url") ||
+            argKey.toLowerCase().includes("endpoint") ||
+            argKey.toLowerCase().includes("host") ||
+            /169\.254\.169\.254/.test(trimmed) ||
+            /metadata\.google\.internal/i.test(trimmed);
+          if (looksLikeUrl) {
             const netRes = analyzeUrl(trimmed, effectiveMandate);
             violations.push(...netRes.violations);
             if (netRes.isSSRF) isNetwork = true;

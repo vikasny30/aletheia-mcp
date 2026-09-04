@@ -33,6 +33,36 @@ const PRIVILEGE_PATTERNS = [
 
 const WRITE_STATEMENTS = /\b(INSERT\s+INTO|UPDATE\s+\S+\s+SET|DELETE\s+FROM|CREATE\s+TABLE|ALTER\s+TABLE|MERGE\s+INTO)\b/i;
 
+const SQL_SYSTEM_ESCAPE_PATTERNS: Array<{
+  pattern: RegExp;
+  description: string;
+}> = [
+  {
+    pattern: /\bCOPY\b[\s\S]*?\b(FROM|TO)\s+PROGRAM\b/i,
+    description: "Database command execution via COPY PROGRAM (PostgreSQL)",
+  },
+  {
+    pattern: /\b(pg_read_file|pg_read_binary_file|pg_write_file|lo_import|lo_export)\s*\(/i,
+    description: "Database filesystem access function pg_read_file / lo_import (PostgreSQL)",
+  },
+  {
+    pattern: /\bLOAD\s+DATA\s+(?:LOCAL\s+)?INFILE\b/i,
+    description: "Database arbitrary file read via LOAD DATA INFILE (MySQL)",
+  },
+  {
+    pattern: /\bINTO\s+(OUTFILE|DUMPFILE)\b/i,
+    description: "Database arbitrary file write via INTO OUTFILE / DUMPFILE (MySQL)",
+  },
+  {
+    pattern: /\bATTACH\s+(?:DATABASE\s+)?['`"]?[^;'`"]+['`"]?\s+AS\b/i,
+    description: "Arbitrary database file attachment via ATTACH DATABASE (SQLite)",
+  },
+  {
+    pattern: /\bxp_cmdshell\b/i,
+    description: "Operating system command execution via xp_cmdshell",
+  },
+];
+
 // Tautological predicate patterns that fake a bounded WHERE clause
 const TAUTOLOGICAL_WHERE_PATTERN = /\bWHERE\s+(?:1\s*=\s*1|0\s*=\s*0|true\b|'[^']*'\s*=\s*'[^']*'|(\d+)\s*=\s*\1)(?=\s*(?:;|$|\)|RETURNING\b|ORDER\b|LIMIT\b|GROUP\b|HAVING\b|WINDOW\b|INTO\b|--|\/\*))/i;
 
@@ -168,6 +198,21 @@ export function analyzeSqlQuery(rawSqlInput: unknown, mandate: Mandate): SqlAnal
         description: "SQL user privilege manipulation attempt",
         evidence: (pattern.test(repSpace) ? repSpace : repCollapsed).slice(0, 100),
         remediation: "Agents are not permitted to grant roles, create users, or alter security attributes.",
+      });
+      break;
+    }
+  }
+
+  // 3.5. Check for Database System/OS Escapes & Filesystem primitives
+  for (const { pattern, description } of SQL_SYSTEM_ESCAPE_PATTERNS) {
+    if (pattern.test(repSpace) || pattern.test(repCollapsed) || pattern.test(rawSql)) {
+      violations.push({
+        signature: "S3",
+        type: "PRIVILEGE_ESCALATION",
+        severity: "CRITICAL",
+        description,
+        evidence: (pattern.test(repSpace) ? repSpace : pattern.test(repCollapsed) ? repCollapsed : rawSql).slice(0, 100),
+        remediation: "Database OS execution and filesystem access primitives are strictly prohibited in agent execution mode.",
       });
       break;
     }

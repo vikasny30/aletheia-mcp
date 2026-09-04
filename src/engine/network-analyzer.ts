@@ -72,8 +72,15 @@ export function analyzeUrl(candidateUrlInput: unknown, mandate: Mandate): Networ
     };
   }
 
+  let normalizedUrl = candidateUrl.trim();
+  if (normalizedUrl.startsWith("//")) {
+    normalizedUrl = `http:${normalizedUrl}`;
+  } else if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(normalizedUrl)) {
+    normalizedUrl = `http://${normalizedUrl}`;
+  }
+
   try {
-    const parsed = new URL(candidateUrl);
+    const parsed = new URL(normalizedUrl);
     const hostname = parsed.hostname;
     const normalizedHostname = normalizeHostname(hostname);
 
@@ -136,6 +143,33 @@ export function analyzeUrl(candidateUrlInput: unknown, mandate: Mandate): Networ
     };
   } catch {
     // Malformed URL or non-URL string
+    const isCloudMetadata = CLOUD_METADATA_PATTERNS.some((pattern) => pattern.test(candidateUrl) || pattern.test(normalizedUrl));
+    if (isCloudMetadata) {
+      violations.push({
+        signature: "S3",
+        type: "UNAUTHORIZED_NETWORK_EGRESS",
+        severity: "CRITICAL",
+        description: `Blocked attempt to access cloud instance metadata (${candidateUrl})`,
+        evidence: candidateUrl,
+        remediation: "Requests to cloud metadata endpoints are strictly prohibited to prevent credential exfiltration.",
+      });
+      return {
+        isSSRF: true,
+        violations,
+      };
+    }
+
+    if (!mandate.allowNetwork) {
+      violations.push({
+        signature: "S3",
+        type: "UNAUTHORIZED_NETWORK_EGRESS",
+        severity: "HIGH",
+        description: `Network request rejected under local-only mandate: ${candidateUrl}`,
+        evidence: candidateUrl,
+        remediation: "The active session mandate permits offline operation only.",
+      });
+    }
+
     return {
       isSSRF: false,
       violations,

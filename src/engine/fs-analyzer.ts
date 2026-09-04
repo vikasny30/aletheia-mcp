@@ -29,6 +29,8 @@ const SENSITIVE_FILENAMES = new Set([
   "sudoers",
   ".npmrc",
   ".netrc",
+  ".git-credentials",
+  ".gitconfig",
 ]);
 
 export interface FsAnalysis {
@@ -75,17 +77,30 @@ export function analyzePath(candidatePathInput: unknown, mandate: Mandate, isWri
     : path.resolve(process.cwd(), candidatePath);
   const rawBaseName = path.basename(rawResolved).toLowerCase();
 
-  // 1. Check for Sensitive Files
+  const isEnvFile =
+    baseName === ".env" ||
+    baseName.startsWith(".env.") ||
+    rawBaseName === ".env" ||
+    rawBaseName.startsWith(".env.");
+
+  // 1. Check for Sensitive Files and Directories
   if (
+    isEnvFile ||
     SENSITIVE_FILENAMES.has(baseName) ||
     SENSITIVE_FILENAMES.has(rawBaseName) ||
     resolved.includes("/.ssh/") ||
     resolved.includes("/.aws/") ||
+    resolved.includes("/.kube/") ||
+    resolved.includes("/.docker/") ||
+    resolved.includes("/.gnupg/") ||
     resolved.includes("/etc/shadow") ||
     resolved.includes("/etc/passwd") ||
     resolved.includes("/etc/sudoers") ||
     rawResolved.includes("/.ssh/") ||
-    rawResolved.includes("/.aws/")
+    rawResolved.includes("/.aws/") ||
+    rawResolved.includes("/.kube/") ||
+    rawResolved.includes("/.docker/") ||
+    rawResolved.includes("/.gnupg/")
   ) {
     violations.push({
       signature: "S3",
