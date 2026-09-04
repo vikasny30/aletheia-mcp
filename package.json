@@ -1,0 +1,54 @@
+{
+  "name": "aletheia-mcp",
+  "version": "1.0.0",
+  "description": "Model Context Protocol (MCP) server for Aletheia: Sub-millisecond runtime safety & scope creep (S3) filter for AI agent tool calls.",
+  "type": "module",
+  "bin": {
+    "aletheia-mcp": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "test": "tsx test/s3-scope.test.ts",
+    "benchmark": "tsx test/latency-benchmark.ts",
+    "prepare": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "anthropic",
+    "claude",
+    "agent-safety",
+    "guardrails",
+    "aletheia",
+    "scope-creep",
+    "security-interceptor",
+    "latency"
+  ],
+  "author": "Vikas Shivpuriya <vikas.ny30@gmail.com>",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vikasny30/aletheia-mcp.git"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.6.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.5",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

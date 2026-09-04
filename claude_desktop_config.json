@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "aletheia": {
+      "command": "npx",
+      "args": ["-y", "aletheia-mcp"],
+      "env": {}
+    }
+  }
+}
