@@ -2,7 +2,7 @@
  * Aletheia MCP Server: High-Performance SQL Query & DDL/DML Guard
  * 
  * Target latency: <0.1ms
- * Detects: Destructive DDL (DROP, TRUNCATE), unbounded DML (DELETE/UPDATE without WHERE),
+ * Detects: Destructive DDL (DROP, TRUNCATE), unbounded DML (DELETE/UPDATE without WHERE or with WHERE 1=1),
  * privilege tampering (GRANT, ALTER USER), and multi-statement injection tricks.
  */
 
@@ -33,11 +33,15 @@ const PRIVILEGE_PATTERNS = [
 
 const WRITE_STATEMENTS = /\b(INSERT\s+INTO|UPDATE\s+\S+\s+SET|DELETE\s+FROM|CREATE\s+TABLE|ALTER\s+TABLE|MERGE\s+INTO)\b/i;
 
+// Tautological predicate patterns that fake a bounded WHERE clause
+const TAUTOLOGICAL_WHERE_PATTERN = /\bWHERE\s+(1\s*=\s*1|0\s*=\s*0|true|'[^']*'\s*=\s*'[^']*'|\d+\s*=\s*\d+)\s*(;|$)/i;
+
 export interface SqlAnalysis {
   isDestructive: boolean;
   isWriteAttempt: boolean;
   statementType: "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "DDL" | "UNKNOWN";
   hasWhereClause: boolean;
+  isTautological: boolean;
   violations: Violation[];
   targetTables: string[];
 }
@@ -56,6 +60,7 @@ export function analyzeSqlQuery(rawSql: string, mandate: Mandate): SqlAnalysis {
 
   const isWriteAttempt = WRITE_STATEMENTS.test(normalized) || statementType === "DDL";
   const hasWhereClause = /\bWHERE\b/i.test(normalized);
+  const isTautological = hasWhereClause && TAUTOLOGICAL_WHERE_PATTERN.test(normalized);
 
   // 1. Check for Destructive DDL (DROP, TRUNCATE)
   for (const { pattern, description } of DESTRUCTIVE_DDL_PATTERNS) {
@@ -71,26 +76,30 @@ export function analyzeSqlQuery(rawSql: string, mandate: Mandate): SqlAnalysis {
     }
   }
 
-  // 2. Check for Unbounded Mutations (DELETE or UPDATE without WHERE clause)
-  if (statementType === "DELETE" && !hasWhereClause) {
+  // 2. Check for Unbounded Mutations (DELETE or UPDATE without WHERE clause or with tautological WHERE)
+  if (statementType === "DELETE" && (!hasWhereClause || isTautological)) {
     violations.push({
       signature: "S3",
       type: "UNBOUNDED_SQL_MUTATION",
       severity: "CRITICAL",
-      description: "DELETE statement without WHERE clause (unbounded table deletion)",
+      description: isTautological
+        ? "DELETE statement with tautological WHERE predicate (WHERE 1=1) effectively wipes entire table"
+        : "DELETE statement without WHERE clause (unbounded table deletion)",
       evidence: normalized.slice(0, 100),
-      remediation: "Provide explicit WHERE predicates targeting specific keys.",
+      remediation: "Provide explicit non-tautological WHERE predicates targeting specific keys.",
     });
   }
 
-  if (statementType === "UPDATE" && !hasWhereClause) {
+  if (statementType === "UPDATE" && (!hasWhereClause || isTautological)) {
     violations.push({
       signature: "S3",
       type: "UNBOUNDED_SQL_MUTATION",
       severity: "HIGH",
-      description: "UPDATE statement without WHERE clause (unbounded column overwrite across all rows)",
+      description: isTautological
+        ? "UPDATE statement with tautological WHERE predicate (WHERE 1=1) overwrites column across all rows"
+        : "UPDATE statement without WHERE clause (unbounded column overwrite across all rows)",
       evidence: normalized.slice(0, 100),
-      remediation: "Add an explicit WHERE clause to constrain the update scope.",
+      remediation: "Add an explicit non-tautological WHERE clause to constrain the update scope.",
     });
   }
 
@@ -147,6 +156,7 @@ export function analyzeSqlQuery(rawSql: string, mandate: Mandate): SqlAnalysis {
     isWriteAttempt,
     statementType,
     hasWhereClause,
+    isTautological,
     violations,
     targetTables,
   };

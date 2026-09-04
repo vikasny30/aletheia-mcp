@@ -1,9 +1,15 @@
 /**
- * Aletheia MCP Server: High-Performance Bash & Shell AST / Lexical Analyzer
+ * Aletheia MCP Server: High-Performance Bash & Shell Lexical / Pattern Analyzer
  * 
- * Target latency: <0.2ms
- * Detects: Destructive mutations, credential harvesting, privilege escalation,
- * obfuscated execution (base64, hex, subshells, pipe-to-sh), out-of-boundary redirects.
+ * Target latency: <0.1ms
+ * Features:
+ * - Multi-stage token unquoting (quote-split & backslash-split neutralization)
+ * - Environment variable assignment resolution (X=rm; $X -rf /)
+ * - Generalized fork-bomb detection (any function name)
+ * - Interpreter escape hatch interception (python -c, node -e, perl, ruby, php, sh)
+ * - SetUID / privilege escalation detection (chmod u+s, chmod 4755, sudo, su)
+ * - File elimination tools (find -delete, shred, rsync --delete)
+ * - De-obfuscation (base64, openssl enc, xxd -r, subshells, pipe-to-sh)
  */
 
 import { Violation, Mandate } from "./types.js";
@@ -39,6 +45,11 @@ const DESTRUCTIVE_SIGNATURES: Array<{
     type: "DESTRUCTIVE_FS_COMMAND",
   },
   {
+    pattern: /\bfind\s+.*(-[a-z]*delete|-exec\s+rm)\b/i,
+    description: "Find utility with delete action or exec rm",
+    type: "DESTRUCTIVE_FS_COMMAND",
+  },
+  {
     pattern: /\b(mkfs(\.[a-z0-9]+)?|dd\s+if=\S+\s+of=\/dev\/(sd[a-z]|nvme\d|disk\d)|fdisk|parted)\b/i,
     description: "Raw disk manipulation or partition formatting tool",
     type: "DESTRUCTIVE_FS_COMMAND",
@@ -49,8 +60,14 @@ const DESTRUCTIVE_SIGNATURES: Array<{
     type: "DESTRUCTIVE_FS_COMMAND",
   },
   {
-    pattern: /(:(){ :\|:& };:|:\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:)/,
+    // Generalized fork bomb: any function calling itself piped into itself in background
+    pattern: /\b([a-zA-Z0-9_]+)\s*\(\)\s*\{[^}]*\b\1\s*\|\s*\1\s*&[^}]*\}\s*;\s*\1\b/i,
     description: "Fork bomb process saturation sequence",
+    type: "SYSTEM_STABILITY_THREAT",
+  },
+  {
+    pattern: /(:(){ :\|:& };:|:\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:)/,
+    description: "Classic fork bomb process saturation sequence",
     type: "SYSTEM_STABILITY_THREAT",
   },
   {
@@ -64,9 +81,25 @@ const DESTRUCTIVE_SIGNATURES: Array<{
     type: "PRIVILEGE_ESCALATION",
   },
   {
+    // SetUID / SetGID escalation: chmod u+s, chmod +s, chmod 4755
+    pattern: /\bchmod\s+.*(\+[a-z]*s|[0-7]?[4-7][0-7]{3}|u\+s|g\+s)\b/i,
+    description: "SetUID / SetGID permission elevation attempt",
+    type: "PRIVILEGE_ESCALATION",
+  },
+  {
     pattern: /\b(sudo|su\s+-|doas)\b/i,
     description: "Privilege escalation attempt (sudo/su/doas)",
     type: "PRIVILEGE_ESCALATION",
+  },
+  {
+    pattern: /\bshred\s+(-[a-z]*[ufrz]|--remove|--zero)\b/i,
+    description: "Shred secure file destruction invocation",
+    type: "DESTRUCTIVE_FS_COMMAND",
+  },
+  {
+    pattern: /\brsync\s+.*--delete\b/i,
+    description: "Rsync destructive mirror deletion flag (--delete)",
+    type: "DESTRUCTIVE_FS_COMMAND",
   },
   {
     pattern: /\b(kill\s+-9\s+-1|killall\s+-9\s+(systemd|launchd|init|loginwindow))\b/i,
@@ -85,8 +118,9 @@ const OBFUSCATION_PATTERNS: Array<{
     description: "Remote payload download directly piped into shell execution",
   },
   {
-    pattern: /echo\s+[A-Za-z0-9+/=]{8,}\s*\|\s*base64\s+(-d|--decode)\s*\|\s*(ba|z)?sh/i,
-    description: "Base64 encoded string piped directly into execution shell",
+    // base64, openssl enc, xxd -r piped to shell
+    pattern: /(echo\s+[A-Za-z0-9+/=]{8,}\s*\|\s*)?(base64\s+(-d|--decode)|openssl\s+(enc\s+)?-base64\s+-d|xxd\s+-r)\s*\|\s*(ba|z)?sh/i,
+    description: "Encoded string or cipher payload piped directly into execution shell",
   },
   {
     pattern: /\$\(\s*echo\s+[A-Za-z0-9+/=]{8,}\s*\|\s*base64\s+(-d|--decode)\s*\)/i,
@@ -100,6 +134,44 @@ const OBFUSCATION_PATTERNS: Array<{
     pattern: /\$'\\[0-9xX]/,
     description: "Hex or octal character escape obfuscation in shell string",
   },
+];
+
+// Interpreter escape hatch patterns: python -c "...", node -e "...", etc.
+const INTERPRETER_PATTERNS = [
+  {
+    runtime: "python",
+    pattern: /\b(python[23]?|pypy[23]?)\s+(-[a-zA-Z0-9]*c|--command)\s+([\x27"])([\s\S]*?)\3/i,
+  },
+  {
+    runtime: "node",
+    pattern: /\b(node|nodejs)\s+(-[a-zA-Z0-9]*e|--eval)\s+([\x27"])([\s\S]*?)\3/i,
+  },
+  {
+    runtime: "perl",
+    pattern: /\bperl\s+(-[a-zA-Z0-9]*e)\s+([\x27"])([\s\S]*?)\3/i,
+  },
+  {
+    runtime: "ruby",
+    pattern: /\bruby\s+(-[a-zA-Z0-9]*e)\s+([\x27"])([\s\S]*?)\3/i,
+  },
+  {
+    runtime: "php",
+    pattern: /\bphp\s+(-[a-zA-Z0-9]*r)\s+([\x27"])([\s\S]*?)\3/i,
+  },
+  {
+    runtime: "shell",
+    pattern: /\b(ba|z)?sh\s+(-[a-zA-Z0-9]*c)\s+([\x27"])([\s\S]*?)\3/i,
+  },
+];
+
+// Dangerous functions inside interpreter scripts
+const DANGEROUS_INTERPRETER_CALLS = [
+  { pattern: /os\.system\s*\(/i, description: "Python os.system shell execution" },
+  { pattern: /subprocess\.(run|Popen|call|check_output)\s*\(/i, description: "Python subprocess execution" },
+  { pattern: /shutil\.rmtree\s*\(/i, description: "Python recursive filesystem wipe (shutil.rmtree)" },
+  { pattern: /child_process/i, description: "Node.js child_process invocation" },
+  { pattern: /fs\.(rmSync|rmdirSync|unlinkSync|rm)\s*\(/i, description: "Node.js fs file/directory deletion" },
+  { pattern: /(execSync|spawnSync)\s*\(/i, description: "Node.js synchronous process execution" },
 ];
 
 // Exfiltration signatures
@@ -138,12 +210,39 @@ export interface BashAnalysis {
 }
 
 /**
- * Normalizes command text by stripping benign quotes and collapsing spaces
+ * Normalizes command text by:
+ * 1. Stripping null bytes.
+ * 2. Unescaping backslash-escaped characters (r\m -> rm).
+ * 3. Token-level quote stripping for command and flag tokens (r'm' -> rm, 'r''m' -> rm).
+ * 4. Resolving simple shell variable assignment indirection (X=rm; $X -rf /).
  */
 export function normalizeCommand(raw: string): string {
-  let cleaned = raw.trim();
-  // Strip null bytes
-  cleaned = cleaned.replace(/\0/g, "");
+  let cleaned = raw.trim().replace(/\0/g, "");
+
+  // 1. Unescape backslashes before characters (e.g. \r\m -> rm)
+  cleaned = cleaned.replace(/\\([a-zA-Z0-9_.\-\/])/g, "$1");
+
+  // 2. Token-level quote stripping: within whitespace-delimited tokens, remove internal quotes
+  cleaned = cleaned.replace(/\S+/g, (word) => {
+    // If the word contains quotes, strip single and double quotes to form canonical word
+    return word.replace(/['"]/g, "");
+  });
+
+  // 3. Resolve variable assignments: X=rm; $X -rf /
+  const varMap: Record<string, string> = {};
+  const assignRegex = /(?:export\s+)?([a-zA-Z_][a-zA-Z0-9_]*)=([^\s;]+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = assignRegex.exec(cleaned)) !== null) {
+    if (m[1] && m[2]) {
+      varMap[m[1]] = m[2];
+    }
+  }
+
+  for (const [varName, varVal] of Object.entries(varMap)) {
+    cleaned = cleaned.replace(new RegExp(`\\$${varName}\\b`, "g"), varVal);
+    cleaned = cleaned.replace(new RegExp(`\\$\\{${varName}\\}`, "g"), varVal);
+  }
+
   // Collapse whitespace
   cleaned = cleaned.replace(/\s+/g, " ");
   return cleaned;
@@ -153,9 +252,11 @@ export function normalizeCommand(raw: string): string {
  * Attempts to decode base64 payloads to inspect inner payload
  */
 export function extractAndDecodeBase64(command: string): string | null {
-  const b64Match = command.match(/base64\s+(-d|--decode)[^|]*\|\s*(ba|z)?sh/i)
-    || command.match(/echo\s+([A-Za-z0-9+/=]{8,})\s*\|\s*base64/i);
-  
+  const b64Match =
+    command.match(/base64\s+(-d|--decode)[^|]*\|\s*(ba|z)?sh/i) ||
+    command.match(/echo\s+([A-Za-z0-9+/=]{8,})\s*\|\s*base64/i) ||
+    command.match(/openssl\s+(enc\s+)?-base64\s+-d\s*\|\s*(ba|z)?sh/i);
+
   if (b64Match) {
     const rawPayload = command.match(/[A-Za-z0-9+/=]{8,}/);
     if (rawPayload) {
@@ -171,7 +272,7 @@ export function extractAndDecodeBase64(command: string): string | null {
 }
 
 /**
- * High-speed deterministic Bash safety analysis (<0.2ms)
+ * High-speed deterministic Bash safety analysis (<0.1ms)
  */
 export function analyzeBashCommand(rawCommand: string, mandate: Mandate): BashAnalysis {
   const normalized = normalizeCommand(rawCommand);
@@ -181,15 +282,49 @@ export function analyzeBashCommand(rawCommand: string, mandate: Mandate): BashAn
   const isNetworkAttempt = NETWORK_COMMANDS.test(normalized);
   const isSubshell = /(`|\$\()/.test(normalized);
 
-  // 1. Check Obfuscation & Evasion Patterns
+  // 1. Check Interpreter Escape Hatches (python -c, node -e, etc.)
+  for (const interp of INTERPRETER_PATTERNS) {
+    const match = rawCommand.match(interp.pattern);
+    if (match) {
+      const scriptBody = match[4];
+      // Check for dangerous interpreter function calls
+      for (const danger of DANGEROUS_INTERPRETER_CALLS) {
+        if (danger.pattern.test(scriptBody)) {
+          violations.push({
+            signature: "S3",
+            type: "INTERPRETER_ESCAPE_EXECUTION",
+            severity: "CRITICAL",
+            description: `Interpreter execution escape detected (${interp.runtime}): ${danger.description}`,
+            evidence: rawCommand.slice(0, 140),
+            remediation: "Execute explicit commands directly rather than hiding logic inside interpreter eval one-liners.",
+          });
+          break;
+        }
+      }
+
+      // Recursively analyze inner command if it contains shell-like strings
+      const innerCmdMatch = scriptBody.match(/['"](.*?)['"]/);
+      if (innerCmdMatch && innerCmdMatch[1]) {
+        const innerAnalysis = analyzeBashCommand(innerCmdMatch[1], mandate);
+        for (const v of innerAnalysis.violations) {
+          violations.push({
+            ...v,
+            description: `Interpreter payload violation: ${v.description}`,
+          });
+        }
+      }
+    }
+  }
+
+  // 2. Check Obfuscation & Evasion Patterns
   for (const { pattern, description } of OBFUSCATION_PATTERNS) {
-    if (pattern.test(normalized)) {
+    if (pattern.test(rawCommand) || pattern.test(normalized)) {
       violations.push({
         signature: "S3",
         type: "OBFUSCATION_BYPASS",
         severity: "CRITICAL",
         description,
-        evidence: normalized.slice(0, 120),
+        evidence: rawCommand.slice(0, 120),
         remediation: "Execute explicit, transparent commands without piping encoded strings or dynamic eval.",
       });
       break;
@@ -197,70 +332,79 @@ export function analyzeBashCommand(rawCommand: string, mandate: Mandate): BashAn
   }
 
   // Also inspect inside decoded base64 if present
-  const decodedPayload = extractAndDecodeBase64(normalized);
+  const decodedPayload = extractAndDecodeBase64(rawCommand);
   if (decodedPayload) {
     violations.push({
       signature: "S3",
       type: "OBFUSCATION_BYPASS",
       severity: "CRITICAL",
-      description: `Hidden base64 payload detected: "${decodedPayload.slice(0, 80)}"`,
-      evidence: normalized.slice(0, 100),
+      description: `Hidden encoded payload detected: "${decodedPayload.slice(0, 80)}"`,
+      evidence: rawCommand.slice(0, 100),
       remediation: "Disclose all commands transparently in plaintext.",
     });
+
+    // Recursively check decoded payload
+    const decodedAnalysis = analyzeBashCommand(decodedPayload, mandate);
+    for (const v of decodedAnalysis.violations) {
+      violations.push({
+        ...v,
+        description: `Decoded payload violation: ${v.description}`,
+      });
+    }
   }
 
-  // 2. Check Destructive Signatures
+  // 3. Check Destructive Signatures (Checked against normalized command)
   for (const { pattern, description, type } of DESTRUCTIVE_SIGNATURES) {
-    if (pattern.test(normalized)) {
+    if (pattern.test(normalized) || pattern.test(rawCommand)) {
       violations.push({
         signature: "S3",
         type,
         severity: "CRITICAL",
         description,
-        evidence: normalized.slice(0, 120),
+        evidence: rawCommand.slice(0, 120),
         remediation: "Destructive commands that erase files, partitions, or system states are blocked.",
       });
     }
   }
 
-  // 3. Check Credential & Sensitive Path Access
+  // 4. Check Credential & Sensitive Path Access
   for (const pattern of SENSITIVE_PATH_PATTERNS) {
-    if (pattern.test(normalized)) {
+    if (pattern.test(normalized) || pattern.test(rawCommand)) {
       violations.push({
         signature: "S3",
         type: "SENSITIVE_FILE_ACCESS",
         severity: "HIGH",
         description: "Attempted read or access to credentials, SSH keys, or OS sensitive secrets",
-        evidence: normalized.slice(0, 120),
+        evidence: rawCommand.slice(0, 120),
         remediation: "Do not access .env, private keys, cloud tokens, or /etc secrets.",
       });
       break;
     }
   }
 
-  // 4. Check Exfiltration Signatures
+  // 5. Check Exfiltration Signatures
   for (const { pattern, description } of EXFILTRATION_PATTERNS) {
-    if (pattern.test(normalized)) {
+    if (pattern.test(normalized) || pattern.test(rawCommand)) {
       violations.push({
         signature: "S3",
         type: "CREDENTIAL_EXFILTRATION",
         severity: "CRITICAL",
         description,
-        evidence: normalized.slice(0, 120),
+        evidence: rawCommand.slice(0, 120),
         remediation: "External data exfiltration or reverse shells are strictly prohibited.",
       });
       break;
     }
   }
 
-  // 5. Evaluate against Mandate Permissions
+  // 6. Evaluate against Mandate Permissions
   if (isWriteAttempt && !mandate.allowWrite) {
     violations.push({
       signature: "S3",
       type: "OUT_OF_SCOPE_MUTATION",
       severity: "HIGH",
       description: "Filesystem write / redirection detected under a read-only mandate",
-      evidence: normalized.slice(0, 120),
+      evidence: rawCommand.slice(0, 120),
       remediation: "The active session mandate permits only read operations. Set allowWrite=true to authorize modifications.",
     });
   }
@@ -271,7 +415,7 @@ export function analyzeBashCommand(rawCommand: string, mandate: Mandate): BashAn
       type: "UNAUTHORIZED_NETWORK_EGRESS",
       severity: "HIGH",
       description: "Outbound network command detected under a local-only mandate",
-      evidence: normalized.slice(0, 120),
+      evidence: rawCommand.slice(0, 120),
       remediation: "The active mandate forbids network egress. Set allowNetwork=true to enable internet access.",
     });
   }
@@ -282,7 +426,7 @@ export function analyzeBashCommand(rawCommand: string, mandate: Mandate): BashAn
       type: "OBFUSCATION_BYPASS",
       severity: "MEDIUM",
       description: "Subshell execution ($() or backticks) detected when subshells are restricted",
-      evidence: normalized.slice(0, 120),
+      evidence: rawCommand.slice(0, 120),
       remediation: "Execute single-level direct commands without nested command substitution.",
     });
   }

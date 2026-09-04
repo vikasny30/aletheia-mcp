@@ -2,7 +2,8 @@
  * Aletheia MCP Server: Unified Signature S3 (Scope Creep) Evaluator
  * 
  * Target latency: <0.5ms end-to-end
- * Combines: Bash AST, SQL AST, Path boundaries, SSRF, and S2b prompt injections.
+ * Combines: Bash lexical analysis, SQL safety, Path boundaries, SSRF, S2b prompt injections,
+ * and monotonic self-mandate escalation protection.
  */
 
 import { performance } from "node:perf_hooks";
@@ -25,12 +26,13 @@ export const DEFAULT_MANDATE: Mandate = {
   sessionId: "default",
   taskDescription: "Autonomous tool execution with safe boundary enforcement",
   allowedTools: ["*"], // Wildcard allows all by default unless restricted
-  allowedPaths: [],
+  allowedPaths: [process.cwd()], // Default: strictly confined to current workspace root
   allowWrite: false, // Read-only by default for maximum agent safety
   allowDestructive: false,
   allowNetwork: false,
   allowSubshells: false,
   riskTolerance: "low",
+  isLocked: true, // Mandate escalation locked against autonomous tampering
   createdAt: Date.now(),
   updatedAt: Date.now(),
 };
@@ -49,16 +51,55 @@ export class S3ScopeEvaluator {
   private startTime = Date.now();
 
   constructor(initialMandate: Partial<Mandate> = {}) {
-    this.mandate = { ...DEFAULT_MANDATE, ...initialMandate, updatedAt: Date.now() };
+    this.mandate = {
+      ...DEFAULT_MANDATE,
+      ...initialMandate,
+      allowedPaths:
+        initialMandate.allowedPaths && initialMandate.allowedPaths.length > 0
+          ? initialMandate.allowedPaths
+          : [process.cwd()],
+      updatedAt: Date.now(),
+    };
   }
 
-  public setMandate(newMandate: Partial<Mandate>): Mandate {
+  /**
+   * Monotonic mandate update:
+   * Agents can tighten policies, but cannot self-loosen permissions without a valid operatorSecret.
+   */
+  public setMandate(
+    newMandate: Partial<Mandate>,
+    callerSecret?: string
+  ): { success: boolean; mandate: Mandate; error?: string } {
+    const current = this.mandate;
+    const isLoosening =
+      (newMandate.allowWrite === true && !current.allowWrite) ||
+      (newMandate.allowDestructive === true && !current.allowDestructive) ||
+      (newMandate.allowNetwork === true && !current.allowNetwork) ||
+      (newMandate.allowSubshells === true && !current.allowSubshells) ||
+      (newMandate.riskTolerance === "high" && current.riskTolerance !== "high") ||
+      (Array.isArray(newMandate.allowedPaths) &&
+        newMandate.allowedPaths.includes("*") &&
+        !current.allowedPaths.includes("*"));
+
+    if (isLoosening && current.isLocked) {
+      const expectedSecret =
+        current.operatorSecret || process.env.ALETHEIA_OPERATOR_SECRET;
+      if (!expectedSecret || callerSecret !== expectedSecret) {
+        return {
+          success: false,
+          mandate: { ...this.mandate },
+          error:
+            "Self-mandate escalation blocked: agents cannot grant themselves write, destructive, or network permissions without valid operatorSecret.",
+        };
+      }
+    }
+
     this.mandate = {
       ...this.mandate,
       ...newMandate,
       updatedAt: Date.now(),
     };
-    return { ...this.mandate };
+    return { success: true, mandate: { ...this.mandate } };
   }
 
   public getMandate(): Mandate {
@@ -66,7 +107,12 @@ export class S3ScopeEvaluator {
   }
 
   public resetMandate(): Mandate {
-    this.mandate = { ...DEFAULT_MANDATE, createdAt: Date.now(), updatedAt: Date.now() };
+    this.mandate = {
+      ...DEFAULT_MANDATE,
+      allowedPaths: [process.cwd()],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
     return { ...this.mandate };
   }
 
@@ -119,7 +165,7 @@ export class S3ScopeEvaluator {
     }
 
     // 2. Scan for S2b prompt injections across all string argument values
-    for (const [key, val] of Object.entries(args)) {
+    for (const [, val] of Object.entries(args)) {
       if (typeof val === "string") {
         const injections = analyzeAdversarialInput(val);
         violations.push(...injections);
@@ -128,6 +174,7 @@ export class S3ScopeEvaluator {
 
     // 3. Specialized evaluation based on tool type
     const normalizedTool = toolName.toLowerCase();
+    let handled = false;
 
     // Bash / Shell tools
     if (
@@ -137,6 +184,7 @@ export class S3ScopeEvaluator {
       normalizedTool.includes("terminal") ||
       normalizedTool === "run_command"
     ) {
+      handled = true;
       const cmd =
         (args.command as string) ||
         (args.cmd as string) ||
@@ -159,6 +207,7 @@ export class S3ScopeEvaluator {
       normalizedTool.includes("database") ||
       normalizedTool.includes("postgres")
     ) {
+      handled = true;
       const sql =
         (args.query as string) ||
         (args.sql as string) ||
@@ -180,6 +229,7 @@ export class S3ScopeEvaluator {
       normalizedTool.includes("write") ||
       normalizedTool.includes("edit")
     ) {
+      handled = true;
       const candidatePath =
         (args.path as string) ||
         (args.filePath as string) ||
@@ -209,6 +259,7 @@ export class S3ScopeEvaluator {
       normalizedTool.includes("request") ||
       normalizedTool.includes("url")
     ) {
+      handled = true;
       const candidateUrl =
         (args.url as string) ||
         (args.Url as string) ||
@@ -221,7 +272,54 @@ export class S3ScopeEvaluator {
       }
     }
 
-    // 4. Calculate Risk Score & Verdict
+    // 4. Fail-closed Generic Deep Inspection for Unrecognized Third-Party Tools
+    // If a tool has a custom or renamed name (e.g. cli_run, os_dispatch, run_task),
+    // scan all string arguments for shell commands, SQL statements, and path traversals.
+    if (!handled) {
+      for (const [argKey, argVal] of Object.entries(args)) {
+        if (typeof argVal === "string" && argVal.trim().length > 2) {
+          const trimmed = argVal.trim();
+
+          // Check if string contains shell commands or shell syntax
+          const looksLikeShell =
+            /\b(rm|git|cat|chmod|find|curl|wget|python|node|sh|bash|sudo|dd|kill|shred|rsync)\b|[|;&]|>>?/i.test(
+              trimmed
+            );
+          if (looksLikeShell) {
+            const bashRes = analyzeBashCommand(trimmed, effectiveMandate);
+            violations.push(...bashRes.violations);
+            if (bashRes.isWriteAttempt) isWrite = true;
+            if (bashRes.isNetworkAttempt) isNetwork = true;
+            targetPaths.push(...bashRes.targetPaths);
+          }
+
+          // Check if string looks like SQL
+          const looksLikeSql =
+            /^\s*(SELECT|INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER|CREATE|GRANT)\b/i.test(
+              trimmed
+            );
+          if (looksLikeSql) {
+            const sqlRes = analyzeSqlQuery(trimmed, effectiveMandate);
+            violations.push(...sqlRes.violations);
+            if (sqlRes.isWriteAttempt) isWrite = true;
+            targetPaths.push(...sqlRes.targetTables);
+          }
+
+          // Check if string looks like a path
+          const looksLikePath =
+            /^(\/|\.\/|\.\.\/|~|\.env)/.test(trimmed) ||
+            argKey.toLowerCase().includes("path") ||
+            argKey.toLowerCase().includes("file");
+          if (looksLikePath) {
+            const fsRes = analyzePath(trimmed, effectiveMandate, false);
+            violations.push(...fsRes.violations);
+            targetPaths.push(fsRes.normalizedPath);
+          }
+        }
+      }
+    }
+
+    // 5. Calculate Risk Score & Verdict
     let maxSeverity: "NONE" | "LOW" | "MEDIUM" | "HIGH" | "CRITICAL" = "NONE";
     let riskScore = 0.05; // Base nominal score for benign actions
 
@@ -229,13 +327,21 @@ export class S3ScopeEvaluator {
       for (const v of violations) {
         if (v.severity === "CRITICAL") maxSeverity = "CRITICAL";
         else if (v.severity === "HIGH" && maxSeverity !== "CRITICAL") maxSeverity = "HIGH";
-        else if (v.severity === "MEDIUM" && maxSeverity !== "CRITICAL" && maxSeverity !== "HIGH") maxSeverity = "MEDIUM";
+        else if (
+          v.severity === "MEDIUM" &&
+          maxSeverity !== "CRITICAL" &&
+          maxSeverity !== "HIGH"
+        )
+          maxSeverity = "MEDIUM";
         else if (v.severity === "LOW" && maxSeverity === "NONE") maxSeverity = "LOW";
       }
 
-      if (maxSeverity === "CRITICAL") riskScore = Math.min(1.0, 0.9 + violations.length * 0.02);
-      else if (maxSeverity === "HIGH") riskScore = Math.min(0.89, 0.7 + violations.length * 0.05);
-      else if (maxSeverity === "MEDIUM") riskScore = Math.min(0.69, 0.4 + violations.length * 0.05);
+      if (maxSeverity === "CRITICAL")
+        riskScore = Math.min(1.0, 0.9 + violations.length * 0.02);
+      else if (maxSeverity === "HIGH")
+        riskScore = Math.min(0.89, 0.7 + violations.length * 0.05);
+      else if (maxSeverity === "MEDIUM")
+        riskScore = Math.min(0.69, 0.4 + violations.length * 0.05);
       else riskScore = 0.25;
     }
 

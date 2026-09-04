@@ -6,6 +6,7 @@
  * behavioral filtering, and Signature S3 (Scope Creep) protection for Claude & autonomous agents.
  */
 
+import fs from "node:fs";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -18,6 +19,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 
 import { S3ScopeEvaluator } from "./engine/s3-scope.js";
+import { Mandate } from "./engine/types.js";
 import { registerTools } from "./tools/index.js";
 import { registerResources } from "./resources/index.js";
 import { registerPrompts } from "./prompts/index.js";
@@ -39,15 +41,51 @@ Aletheia MCP Server v${VERSION}
 Runtime Safety & Scope Creep (Signature S3) Guard for Autonomous Agents
 
 Usage:
-  npx aletheia-mcp                     Start standard MCP server on stdio
-  npx aletheia-mcp --proxy <cmd>...    Start transparent proxy wrapping downstream MCP server
-  npx aletheia-mcp --version           Show version
-  npx aletheia-mcp --help              Show help
+  npx aletheia-mcp [options]                       Start standard MCP server on stdio
+  npx aletheia-mcp [options] --proxy <cmd> [args]  Start transparent proxy wrapping downstream server
+
+Options:
+  --allow-write            Authorize filesystem writes and mutations (default: read-only)
+  --allow-network          Authorize outbound network requests (default: local-only)
+  --allowed-paths <paths>  Comma-separated allowed directories (default: current working directory)
+  --secret <token>         Operator authentication token for runtime mandate changes
+  --mandate <file.json>    Load initial mandate parameters from JSON file
+  --version, -v            Show version
+  --help, -h               Show help
     `);
     process.exit(0);
   }
 
-  const evaluator = new S3ScopeEvaluator();
+  // Parse initial mandate configuration
+  const initialMandate: Partial<Mandate> = {
+    allowWrite: args.includes("--allow-write") || process.env.ALETHEIA_ALLOW_WRITE === "true",
+    allowNetwork: args.includes("--allow-network") || process.env.ALETHEIA_ALLOW_NETWORK === "true",
+  };
+
+  const secretIdx = args.indexOf("--secret");
+  if (secretIdx !== -1 && args[secretIdx + 1]) {
+    initialMandate.operatorSecret = args[secretIdx + 1];
+  } else if (process.env.ALETHEIA_OPERATOR_SECRET) {
+    initialMandate.operatorSecret = process.env.ALETHEIA_OPERATOR_SECRET;
+  }
+
+  const pathsIdx = args.indexOf("--allowed-paths");
+  if (pathsIdx !== -1 && args[pathsIdx + 1]) {
+    initialMandate.allowedPaths = args[pathsIdx + 1].split(",").map((p) => p.trim());
+  }
+
+  const mandateFileIdx = args.indexOf("--mandate");
+  if (mandateFileIdx !== -1 && args[mandateFileIdx + 1]) {
+    try {
+      const fileData = fs.readFileSync(args[mandateFileIdx + 1], "utf-8");
+      const parsed = JSON.parse(fileData);
+      Object.assign(initialMandate, parsed);
+    } catch (e: unknown) {
+      console.error(`[Aletheia MCP] Warning: Failed to read mandate file: ${(e as Error).message}`);
+    }
+  }
+
+  const evaluator = new S3ScopeEvaluator(initialMandate);
 
   // Mode 2: Transparent Proxy Mode
   const proxyIndex = args.indexOf("--proxy");

@@ -3,7 +3,7 @@
  * 
  * Sits between Claude / Client and ANY downstream MCP server,
  * transparently intercepting all `tools/call` messages and enforcing
- * Signature S3 Scope Creep boundaries with <0.5ms overhead.
+ * Signature S3 Scope Creep boundaries with <0.1ms overhead.
  */
 
 import { spawn, ChildProcess } from "node:child_process";
@@ -21,9 +21,19 @@ export class McpProxyGateway {
   public start(downstreamCommand: string, downstreamArgs: string[] = []) {
     console.error(`[Aletheia Proxy] Spawning downstream MCP server: ${downstreamCommand} ${downstreamArgs.join(" ")}`);
 
-    this.childProcess = spawn(downstreamCommand, downstreamArgs, {
-      stdio: ["pipe", "pipe", "inherit"],
-      env: process.env,
+    try {
+      this.childProcess = spawn(downstreamCommand, downstreamArgs, {
+        stdio: ["pipe", "pipe", "inherit"],
+        env: process.env,
+      });
+    } catch (err: unknown) {
+      console.error(`[Aletheia Proxy] Failed to launch downstream command: ${(err as Error).message}`);
+      process.exit(1);
+    }
+
+    this.childProcess.on("error", (err) => {
+      console.error(`[Aletheia Proxy] Downstream process error (ENOENT/spawn failure): ${err.message}`);
+      process.exit(1);
     });
 
     if (!this.childProcess.stdin || !this.childProcess.stdout) {
@@ -62,7 +72,7 @@ export class McpProxyGateway {
     try {
       const message = JSON.parse(line);
 
-      // Check if this is a tool execution request
+      // Intercept tool calls
       if (message.method === "tools/call" && message.params) {
         const toolName = message.params.name;
         const toolArgs = message.params.arguments || {};
@@ -70,17 +80,36 @@ export class McpProxyGateway {
         // Run sub-millisecond S3 evaluation
         const assessment = this.evaluator.evaluate(toolName, toolArgs);
 
-        if (assessment.verdict === "BLOCK") {
-          console.error(`[Aletheia Proxy] BLOCKED out-of-scope tool call '${toolName}' (${assessment.latencyMs}ms)`);
+        // In headless proxy mode, treat BLOCK and CONFIRM_REQUIRED as denials
+        const shouldBlock = assessment.verdict === "BLOCK" || assessment.verdict === "CONFIRM_REQUIRED";
 
-          // Return JSON-RPC error response directly to client without forwarding downstream
+        if (shouldBlock) {
+          console.error(`[Aletheia Proxy] BLOCKED tool call '${toolName}' (${assessment.latencyMs}ms) - Verdict: ${assessment.verdict}`);
+
+          // Return standard MCP CallToolResult with isError: true (RFC compliant, not -32600)
           const blockedResponse = {
             jsonrpc: "2.0",
             id: message.id,
-            error: {
-              code: -32600,
-              message: `Aletheia Policy Block: Action violates Signature S3 (Scope Creep Beyond Mandate)`,
-              data: assessment,
+            result: {
+              isError: true,
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify(
+                    {
+                      status: "BLOCKED",
+                      policy: "Aletheia S3 Scope Creep Prevention",
+                      verdict: assessment.verdict,
+                      riskScore: assessment.riskScore,
+                      violations: assessment.violations,
+                      explanation: assessment.explanation,
+                      latencyMs: assessment.latencyMs,
+                    },
+                    null,
+                    2
+                  ),
+                },
+              ],
             },
           };
 
@@ -89,7 +118,7 @@ export class McpProxyGateway {
         }
       }
 
-      // If allowed or not a tools/call message, forward to downstream MCP server
+      // Forward to downstream MCP server
       if (this.childProcess?.stdin && !this.childProcess.stdin.destroyed) {
         this.childProcess.stdin.write(line + "\n");
       }

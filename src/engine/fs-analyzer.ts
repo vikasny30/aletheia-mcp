@@ -3,6 +3,8 @@
  * 
  * Target latency: <0.05ms
  * Validates: Path traversal, workspace boundary escape, sensitive credential access.
+ * Fails closed: If allowedPaths is not explicitly set to ["*"], confines operations
+ * to the specified paths or defaults to the active workspace [process.cwd()].
  */
 
 import path from "node:path";
@@ -38,27 +40,45 @@ export interface FsAnalysis {
 
 export function analyzePath(candidatePath: string, mandate: Mandate, isWrite: boolean = false): FsAnalysis {
   const violations: Violation[] = [];
-  const normalized = path.normalize(candidatePath);
-  const baseName = path.basename(normalized).toLowerCase();
+  
+  // Resolve absolute path to properly check traversals
+  const resolved = path.isAbsolute(candidatePath)
+    ? path.normalize(candidatePath)
+    : path.resolve(process.cwd(), candidatePath);
+  const baseName = path.basename(resolved).toLowerCase();
 
   // 1. Check for Sensitive Files
-  if (SENSITIVE_FILENAMES.has(baseName) || normalized.includes("/.ssh/") || normalized.includes("/.aws/")) {
+  if (
+    SENSITIVE_FILENAMES.has(baseName) ||
+    resolved.includes("/.ssh/") ||
+    resolved.includes("/.aws/") ||
+    resolved.includes("/etc/shadow") ||
+    resolved.includes("/etc/passwd") ||
+    resolved.includes("/etc/sudoers")
+  ) {
     violations.push({
       signature: "S3",
       type: "SENSITIVE_FILE_ACCESS",
       severity: "CRITICAL",
       description: `Access to protected secret / credential file '${baseName}'`,
-      evidence: normalized,
+      evidence: candidatePath,
       remediation: "Sensitive credential and configuration files are restricted from tool access.",
     });
   }
 
-  // 2. Check Allowed Paths Boundary (if configured in mandate)
+  // 2. Check Allowed Paths Boundary (Fail-closed: default to process.cwd() if empty)
   let isEscapingWorkspace = false;
-  if (mandate.allowedPaths && mandate.allowedPaths.length > 0) {
-    const isWithinAllowed = mandate.allowedPaths.some((allowedRoot) => {
-      const normalizedRoot = path.normalize(allowedRoot);
-      const relative = path.relative(normalizedRoot, normalized);
+  const effectiveAllowedRoots =
+    mandate.allowedPaths && mandate.allowedPaths.length > 0
+      ? mandate.allowedPaths
+      : [process.cwd()];
+
+  const isGloballyUnrestricted = effectiveAllowedRoots.includes("*");
+
+  if (!isGloballyUnrestricted) {
+    const isWithinAllowed = effectiveAllowedRoots.some((allowedRoot) => {
+      const normalizedRoot = path.resolve(allowedRoot);
+      const relative = path.relative(normalizedRoot, resolved);
       return !relative.startsWith("..") && !path.isAbsolute(relative);
     });
 
@@ -68,9 +88,9 @@ export function analyzePath(candidatePath: string, mandate: Mandate, isWrite: bo
         signature: "S3",
         type: "OUT_OF_SCOPE_MUTATION",
         severity: isWrite ? "HIGH" : "MEDIUM",
-        description: `Path '${normalized}' resides outside designated allowed workspace paths`,
-        evidence: `Target: ${normalized}, Allowed: ${mandate.allowedPaths.join(", ")}`,
-        remediation: "Confine file operations strictly to the designated allowed paths.",
+        description: `Path '${candidatePath}' (${resolved}) resides outside designated allowed workspace paths`,
+        evidence: `Target: ${candidatePath}, Allowed: ${effectiveAllowedRoots.join(", ")}`,
+        remediation: "Confine file operations strictly to the designated allowed workspace paths.",
       });
     }
   }
@@ -81,8 +101,8 @@ export function analyzePath(candidatePath: string, mandate: Mandate, isWrite: bo
       signature: "S3",
       type: "OUT_OF_SCOPE_MUTATION",
       severity: "HIGH",
-      description: `Write operation on '${normalized}' rejected under read-only mandate`,
-      evidence: normalized,
+      description: `Write operation on '${candidatePath}' rejected under read-only mandate`,
+      evidence: candidatePath,
       remediation: "Active mandate does not permit write mutations. Update mandate with allowWrite=true to proceed.",
     });
   }
@@ -90,7 +110,7 @@ export function analyzePath(candidatePath: string, mandate: Mandate, isWrite: bo
   return {
     isSensitive: violations.some((v) => v.type === "SENSITIVE_FILE_ACCESS"),
     isEscapingWorkspace,
-    normalizedPath: normalized,
+    normalizedPath: resolved,
     violations,
   };
 }

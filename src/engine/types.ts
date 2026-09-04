@@ -22,10 +22,12 @@ export interface Violation {
     | "OUT_OF_SCOPE_MUTATION"
     | "SENSITIVE_FILE_ACCESS"
     | "OBFUSCATION_BYPASS"
+    | "INTERPRETER_ESCAPE_EXECUTION"
     | "PRIVILEGE_ESCALATION"
     | "PROMPT_INJECTION_PAYLOAD"
     | "UNAUTHORIZED_NETWORK_EGRESS"
     | "SYSTEM_STABILITY_THREAT"
+    | "UNAUTHORIZED_MANDATE_ESCALATION"
     | "DISALLOWED_TOOL";
   severity: Severity;
   description: string;
@@ -45,6 +47,8 @@ export interface Mandate {
   allowNetwork: boolean;
   allowSubshells: boolean;
   riskTolerance: RiskTolerance;
+  operatorSecret?: string; // Optional operator secret required to loosen boundaries
+  isLocked?: boolean;       // If true, mandate cannot be loosened at runtime by the agent
   createdAt: number;
   updatedAt: number;
 }

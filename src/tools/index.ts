@@ -1,20 +1,59 @@
 /**
- * Aletheia MCP Server: Tool Definitions and Handlers
+ * Aletheia MCP Server: Tool Definitions and Handlers with Zod Validation
  */
 
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
+import { z } from "zod";
 import { S3ScopeEvaluator } from "../engine/s3-scope.js";
 import { Mandate } from "../engine/types.js";
 
 const execAsync = promisify(exec);
+
+// ── Zod Schemas for Runtime Validation ──────────────────────────────────────────
+
+const SetMandateSchema = z.object({
+  taskDescription: z.string().min(1, "taskDescription must be non-empty"),
+  allowedTools: z.array(z.string()).optional(),
+  disallowedTools: z.array(z.string()).optional(),
+  allowedPaths: z.array(z.string()).optional(),
+  allowWrite: z.boolean().optional(),
+  allowDestructive: z.boolean().optional(),
+  allowNetwork: z.boolean().optional(),
+  allowSubshells: z.boolean().optional(),
+  riskTolerance: z.enum(["low", "medium", "high"]).optional(),
+  operatorSecret: z.string().optional(),
+});
+
+const InterceptSchema = z.object({
+  tool_name: z.string().min(1, "tool_name is required"),
+  tool_args: z.record(z.unknown()),
+  mandate_override: z.record(z.unknown()).optional(),
+});
+
+const SafeBashSchema = z.object({
+  command: z.string().min(1, "command cannot be empty"),
+  cwd: z.string().optional(),
+  timeoutMs: z.number().int().positive().optional(),
+});
+
+const SafeSqlSchema = z.object({
+  query: z.string().min(1, "query cannot be empty"),
+  database_type: z.string().optional(),
+});
+
+const GetTelemetrySchema = z.object({
+  auditLogLimit: z.number().int().min(1).max(200).optional(),
+});
 
 export function registerTools(evaluator: S3ScopeEvaluator) {
   const toolDefinitions = [
     {
       name: "aletheia_set_mandate",
       description:
-        "Establish or update the active operational safety mandate for this agent session. Declares permissible boundaries, allowed tools, filesystem directories, write permissions, and risk tolerance.",
+        "Establish or update the active operational safety mandate for this agent session. Declares permissible boundaries, allowed tools, filesystem directories, write permissions, and risk tolerance. Loosening restrictions requires operatorSecret.",
+      readOnlyHint: false,
+      idempotentHint: false,
       inputSchema: {
         type: "object",
         properties: {
@@ -58,6 +97,10 @@ export function registerTools(evaluator: S3ScopeEvaluator) {
             enum: ["low", "medium", "high"],
             description: "Threshold policy: 'low' blocks any potential drift; 'high' permits warnings for non-critical risks.",
           },
+          operatorSecret: {
+            type: "string",
+            description: "Operator authentication token required to loosen permissions on a locked mandate.",
+          },
         },
         required: ["taskDescription"],
       },
@@ -65,6 +108,8 @@ export function registerTools(evaluator: S3ScopeEvaluator) {
     {
       name: "aletheia_get_mandate",
       description: "Retrieve the current operational safety mandate, permissions, and active boundary constraints.",
+      readOnlyHint: true,
+      idempotentHint: true,
       inputSchema: {
         type: "object",
         properties: {},
@@ -74,6 +119,8 @@ export function registerTools(evaluator: S3ScopeEvaluator) {
       name: "aletheia_intercept",
       description:
         "Universal sub-millisecond safety gatekeeper. Evaluates any proposed tool invocation against Signature S3 (Scope Creep) and S2b (Prompt Injection) to block destructive, out-of-boundary, or compromised actions before execution.",
+      readOnlyHint: true,
+      idempotentHint: true,
       inputSchema: {
         type: "object",
         properties: {
@@ -97,6 +144,8 @@ export function registerTools(evaluator: S3ScopeEvaluator) {
       name: "aletheia_safe_bash",
       description:
         "Execute a shell/bash command with inline sub-millisecond Signature S3 scope creep protection. Blocks destructive deletes (rm -rf), disk formatting, fork bombs, credential harvesting, privilege escalation, and unauthorized network egress.",
+      readOnlyHint: false,
+      destructiveHint: false,
       inputSchema: {
         type: "object",
         properties: {
@@ -120,6 +169,8 @@ export function registerTools(evaluator: S3ScopeEvaluator) {
       name: "aletheia_safe_sql",
       description:
         "Audit or execute a database query with Signature S3 safety filters. Detects destructive DDL (DROP, TRUNCATE), unbounded DML (DELETE/UPDATE without WHERE), and privilege tampering.",
+      readOnlyHint: true,
+      idempotentHint: false,
       inputSchema: {
         type: "object",
         properties: {
@@ -139,6 +190,8 @@ export function registerTools(evaluator: S3ScopeEvaluator) {
       name: "aletheia_get_telemetry",
       description:
         "Retrieve runtime safety telemetry: total tool calls evaluated, block rate %, latency percentiles (p50, p95, p99 < 1ms), and violation counts broken down by signature.",
+      readOnlyHint: true,
+      idempotentHint: true,
       inputSchema: {
         type: "object",
         properties: {
@@ -151,10 +204,52 @@ export function registerTools(evaluator: S3ScopeEvaluator) {
     },
   ];
 
-  async function handleCall(name: string, args: Record<string, unknown> = {}) {
+  async function handleCall(name: string, rawArgs: Record<string, unknown> = {}) {
     switch (name) {
       case "aletheia_set_mandate": {
-        const updated = evaluator.setMandate(args as unknown as Partial<Mandate>);
+        const parsed = SetMandateSchema.safeParse(rawArgs);
+        if (!parsed.success) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    status: "VALIDATION_ERROR",
+                    errors: parsed.error.format(),
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        }
+
+        const { operatorSecret, ...mandateFields } = parsed.data;
+        const res = evaluator.setMandate(mandateFields as Partial<Mandate>, operatorSecret);
+
+        if (!res.success) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    status: "ESCALATION_BLOCKED",
+                    error: res.error,
+                    currentMandate: res.mandate,
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        }
+
         return {
           content: [
             {
@@ -162,7 +257,7 @@ export function registerTools(evaluator: S3ScopeEvaluator) {
               text: JSON.stringify(
                 {
                   status: "mandate_updated",
-                  mandate: updated,
+                  mandate: res.mandate,
                   message: "Safety envelope active. Subsequent tool calls will be graded against this mandate.",
                 },
                 null,
@@ -186,11 +281,33 @@ export function registerTools(evaluator: S3ScopeEvaluator) {
       }
 
       case "aletheia_intercept": {
-        const toolName = String(args.tool_name || "");
-        const toolArgs = (args.tool_args as Record<string, unknown>) || {};
-        const override = (args.mandate_override as Partial<Mandate>) || undefined;
+        const parsed = InterceptSchema.safeParse(rawArgs);
+        if (!parsed.success) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    status: "VALIDATION_ERROR",
+                    errors: parsed.error.format(),
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        }
 
-        const assessment = evaluator.evaluate(toolName, toolArgs, override);
+        const { tool_name, tool_args, mandate_override } = parsed.data;
+        const assessment = evaluator.evaluate(
+          tool_name,
+          tool_args,
+          mandate_override as Partial<Mandate>
+        );
+
         return {
           content: [
             {
@@ -202,9 +319,27 @@ export function registerTools(evaluator: S3ScopeEvaluator) {
       }
 
       case "aletheia_safe_bash": {
-        const command = String(args.command || "");
-        const cwd = args.cwd ? String(args.cwd) : process.cwd();
-        const timeoutMs = typeof args.timeoutMs === "number" ? args.timeoutMs : 15000;
+        const parsed = SafeBashSchema.safeParse(rawArgs);
+        if (!parsed.success) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    status: "VALIDATION_ERROR",
+                    errors: parsed.error.format(),
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        }
+
+        const { command, cwd = process.cwd(), timeoutMs = 15000 } = parsed.data;
 
         // 1. Intercept first
         const assessment = evaluator.evaluate("bash", { command, cwd });
@@ -298,7 +433,27 @@ export function registerTools(evaluator: S3ScopeEvaluator) {
       }
 
       case "aletheia_safe_sql": {
-        const query = String(args.query || "");
+        const parsed = SafeSqlSchema.safeParse(rawArgs);
+        if (!parsed.success) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    status: "VALIDATION_ERROR",
+                    errors: parsed.error.format(),
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        }
+
+        const { query } = parsed.data;
         const assessment = evaluator.evaluate("sql", { query });
 
         return {
@@ -319,7 +474,9 @@ export function registerTools(evaluator: S3ScopeEvaluator) {
       }
 
       case "aletheia_get_telemetry": {
-        const limit = typeof args.auditLogLimit === "number" ? args.auditLogLimit : 20;
+        const parsed = GetTelemetrySchema.safeParse(rawArgs);
+        const limit = parsed.success && parsed.data.auditLogLimit ? parsed.data.auditLogLimit : 20;
+
         const telemetry = evaluator.getTelemetry();
         const recentAudit = evaluator.getAuditLog(limit);
 
