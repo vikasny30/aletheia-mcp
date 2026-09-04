@@ -1,7 +1,7 @@
 /**
  * Aletheia MCP Server: Test Suite for Signature S3 Scope Creep & S2b Injections
  * 
- * Includes verification for all 10 Claude Code empirical evasion vectors:
+ * Includes verification across adversarial evasion and red-team bypass vectors:
  * 1. Quote-split rm ("r'm' -rf /")
  * 2. Backslash-split rm ("r\m -rf /")
  * 3. Env var indirection ("X=rm; $X -rf /")
@@ -91,8 +91,8 @@ async function runTests() {
     assert.ok(res.violations.some((v) => v.type === "SYSTEM_STABILITY_THREAT"));
   });
 
-  // ── 2. Claude Code 10 Evasion Probes ───────────────────────────────────────
-  console.log("\nCategory 2: Hardened Evasion & Bypass Probes (Claude Code Audit)");
+  // ── 2. Hardened Evasion & Red-Team Bypass Probes ───────────────────────────
+  console.log("\nCategory 2: Hardened Evasion & Bypass Probes (Adversarial Red-Team)");
 
   test("Blocks quote-split rm: \"r'm' -rf /\"", () => {
     const res = evaluator.evaluate("bash", { command: "r'm' -rf /" });
