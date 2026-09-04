@@ -35,17 +35,17 @@ const DESTRUCTIVE_SIGNATURES: Array<{
   type: Violation["type"];
 }> = [
   {
-    pattern: /\brm\s+(-[a-z]*[rf][a-z]*\s+)+(\/+|\/\*|~\/?|\$HOME\/?|(\.\.|\.)\/?|\*|\.\/\*|\/tmp\/\*|\/etc\/?|\/usr\/?)(?![\w\-\/])/i,
+    pattern: /\brm\s+(-[a-z]{0,10}[rf][a-z]{0,10}\s+)+(\/+|\/\*|~\/?|\$HOME\/?|(\.\.|\.)\/?|\*|\.\/\*|\/tmp\/\*|\/etc\/?|\/usr\/?)(?![\w\-\/])/i,
     description: "Unbounded filesystem recursive delete (rm -rf root / home / wildcard)",
     type: "DESTRUCTIVE_FS_COMMAND",
   },
   {
-    pattern: /\brm\s+-[a-z]*[rf][a-z]*\s+(\/+|\/\*|~\/?|\*|\.|\/etc\/?|\/usr\/?)(?![\w\-\/])/i,
+    pattern: /\brm\s+-[a-z]{0,10}[rf][a-z]{0,10}\s+(\/+|\/\*|~\/?|\*|\.|\/etc\/?|\/usr\/?)(?![\w\-\/])/i,
     description: "Recursive delete of root, wildcard, or home",
     type: "DESTRUCTIVE_FS_COMMAND",
   },
   {
-    pattern: /\bfind\s+.*(-[a-z]*delete|-exec\s+rm)\b/i,
+    pattern: /\bfind\s+[^;&|`]*(-[a-z]{0,8}delete|-exec\s+rm)\b/i,
     description: "Find utility with delete action or exec rm",
     type: "DESTRUCTIVE_FS_COMMAND",
   },
@@ -55,7 +55,7 @@ const DESTRUCTIVE_SIGNATURES: Array<{
     type: "DESTRUCTIVE_FS_COMMAND",
   },
   {
-    pattern: /\bgit\s+(reset\s+--hard|clean\s+-[a-z]*f[a-z]*|push\s+-[a-z]*f[a-z]*|push\s+--force)\b/i,
+    pattern: /\bgit\s+(reset\s+--hard|clean\s+-[a-z]{0,8}f[a-z]{0,8}|push\s+-[a-z]{0,8}f[a-z]{0,8}|push\s+--force)\b/i,
     description: "Destructive git operation (hard reset, forced clean, or force push)",
     type: "DESTRUCTIVE_FS_COMMAND",
   },
@@ -76,13 +76,13 @@ const DESTRUCTIVE_SIGNATURES: Array<{
     type: "SYSTEM_STABILITY_THREAT",
   },
   {
-    pattern: /\bchmod\s+(-[a-z]*R[a-z]*\s+)?(777|0777|a\+rwx)\s+(\/|~|\$HOME|\.\.)/i,
+    pattern: /\bchmod\s+(-[a-z]{0,8}R[a-z]{0,8}\s+)?(777|0777|a\+rwx)\s+(\/+|\/\*|~\/?|\$HOME\/?|\.\.?\/?)(?![\w\-\/])/i,
     description: "Broad global permission relaxation (chmod 777 on sensitive root)",
     type: "PRIVILEGE_ESCALATION",
   },
   {
     // SetUID / SetGID escalation: chmod u+s, chmod +s, chmod 4755
-    pattern: /\bchmod\s+.*(\+[a-z]*s|[0-7]?[4-7][0-7]{3}|u\+s|g\+s)\b/i,
+    pattern: /\bchmod\s+[^;&|`]*(\+[a-z]{0,8}s|[0-7]?[4-7][0-7]{3}|u\+s|g\+s)\b/i,
     description: "SetUID / SetGID permission elevation attempt",
     type: "PRIVILEGE_ESCALATION",
   },
@@ -92,12 +92,12 @@ const DESTRUCTIVE_SIGNATURES: Array<{
     type: "PRIVILEGE_ESCALATION",
   },
   {
-    pattern: /\bshred\s+(-[a-z]*[ufrz]|--remove|--zero)\b/i,
+    pattern: /\bshred\s+(-[a-z]{0,8}[ufrz]|--remove|--zero)\b/i,
     description: "Shred secure file destruction invocation",
     type: "DESTRUCTIVE_FS_COMMAND",
   },
   {
-    pattern: /\brsync\s+.*--delete\b/i,
+    pattern: /\brsync\s+[^;&|`]*--delete\b/i,
     description: "Rsync destructive mirror deletion flag (--delete)",
     type: "DESTRUCTIVE_FS_COMMAND",
   },

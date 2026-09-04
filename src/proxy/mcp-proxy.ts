@@ -40,14 +40,30 @@ export class McpProxyGateway {
       throw new Error("Failed to attach stdio pipes to downstream MCP server");
     }
 
-    // Read lines from downstream MCP stdout and forward to client stdout
+    // Signal forwarding: propagate SIGINT/SIGTERM to downstream server to prevent zombie processes
+    const forwardSignal = (signal: NodeJS.Signals) => {
+      if (this.childProcess && !this.childProcess.killed) {
+        this.childProcess.kill(signal);
+      }
+      process.exit(0);
+    };
+    process.on("SIGINT", () => forwardSignal("SIGINT"));
+    process.on("SIGTERM", () => forwardSignal("SIGTERM"));
+
+    // Read lines from downstream MCP stdout and forward to client stdout with backpressure handling
     const downstreamReader = readline.createInterface({
       input: this.childProcess.stdout,
       terminal: false,
     });
 
     downstreamReader.on("line", (line) => {
-      process.stdout.write(line + "\n");
+      const ok = process.stdout.write(line + "\n");
+      if (!ok && this.childProcess?.stdout) {
+        this.childProcess.stdout.pause();
+        process.stdout.once("drain", () => {
+          this.childProcess?.stdout?.resume();
+        });
+      }
     });
 
     // Read lines from client stdin and intercept tools/call
