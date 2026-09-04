@@ -1,6 +1,6 @@
 {
   "name": "aletheia-mcp",
-  "version": "1.0.0",
+  "version": "0.2.0",
   "description": "Model Context Protocol (MCP) server for Aletheia: Sub-millisecond runtime safety & scope creep (S3) filter for AI agent tool calls.",
   "type": "module",
   "bin": {

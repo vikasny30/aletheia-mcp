@@ -125,11 +125,54 @@ export class S3ScopeEvaluator {
     sessionOverride?: Partial<Mandate>
   ): AssessmentResult {
     const t0 = performance.now();
-    const effectiveMandate = sessionOverride
-      ? { ...this.mandate, ...sessionOverride }
-      : this.mandate;
-
     const violations: Violation[] = [];
+    let effectiveMandate = this.mandate;
+
+    if (sessionOverride) {
+      // Check if sessionOverride attempts to loosen permissions
+      const isLoosening =
+        (sessionOverride.allowWrite === true && !this.mandate.allowWrite) ||
+        (sessionOverride.allowDestructive === true && !this.mandate.allowDestructive) ||
+        (sessionOverride.allowNetwork === true && !this.mandate.allowNetwork) ||
+        (sessionOverride.allowSubshells === true && !this.mandate.allowSubshells) ||
+        (sessionOverride.riskTolerance === "high" && this.mandate.riskTolerance !== "high") ||
+        (Array.isArray(sessionOverride.allowedPaths) &&
+          sessionOverride.allowedPaths.includes("*") &&
+          !this.mandate.allowedPaths.includes("*"));
+
+      if (isLoosening && this.mandate.isLocked) {
+        const expectedSecret =
+          this.mandate.operatorSecret || process.env.ALETHEIA_OPERATOR_SECRET;
+        const callerSecret = sessionOverride.operatorSecret;
+
+        if (!expectedSecret || callerSecret !== expectedSecret) {
+          violations.push({
+            signature: "S3",
+            type: "UNAUTHORIZED_MANDATE_ESCALATION",
+            severity: "CRITICAL",
+            description:
+              "Unauthorized mandate override attempt: tool calls cannot self-grant looser permissions without a valid operatorSecret.",
+            evidence: JSON.stringify(sessionOverride),
+            remediation:
+              "Mandate overrides in aletheia_intercept are only permitted to tighten boundaries, not loosen them.",
+          });
+          // Sanitize: strip loosening fields from effectiveMandate
+          const sanitized = { ...sessionOverride };
+          delete sanitized.allowWrite;
+          delete sanitized.allowDestructive;
+          delete sanitized.allowNetwork;
+          delete sanitized.allowSubshells;
+          delete sanitized.riskTolerance;
+          delete sanitized.allowedPaths;
+          effectiveMandate = { ...this.mandate, ...sanitized };
+        } else {
+          effectiveMandate = { ...this.mandate, ...sessionOverride };
+        }
+      } else {
+        effectiveMandate = { ...this.mandate, ...sessionOverride };
+      }
+    }
+
     let isWrite = false;
     let isNetwork = false;
     const targetPaths: string[] = [];

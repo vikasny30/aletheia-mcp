@@ -35,12 +35,12 @@ const DESTRUCTIVE_SIGNATURES: Array<{
   type: Violation["type"];
 }> = [
   {
-    pattern: /\brm\s+(-[a-z]*[rf][a-z]*\s+)+(\/|\/\*|~|\$HOME|\.\.?|\*|\.\/\*|\/tmp\/\*|\/etc|\/usr)(\s|$|;)/i,
+    pattern: /\brm\s+(-[a-z]*[rf][a-z]*\s+)+(\/|\/\*|~|\$HOME|\.\.?|\*|\.\/\*|\/tmp\/\*|\/etc|\/usr)(?=[\s;)&|}>]|$)/i,
     description: "Unbounded filesystem recursive delete (rm -rf root / home / wildcard)",
     type: "DESTRUCTIVE_FS_COMMAND",
   },
   {
-    pattern: /\brm\s+-[a-z]*[rf][a-z]*\s+(\/|\/\*|~|\*|\.)(\s|$|;)/i,
+    pattern: /\brm\s+-[a-z]*[rf][a-z]*\s+(\/|\/\*|~|\*|\.)(?=[\s;)&|}>]|$)/i,
     description: "Recursive delete of root, wildcard, or home",
     type: "DESTRUCTIVE_FS_COMMAND",
   },
@@ -166,7 +166,10 @@ const INTERPRETER_PATTERNS = [
 
 // Dangerous functions inside interpreter scripts
 const DANGEROUS_INTERPRETER_CALLS = [
-  { pattern: /os\.system\s*\(/i, description: "Python os.system shell execution" },
+  { pattern: /\b(os\.)?system\s*\(/i, description: "System shell execution (.system)" },
+  { pattern: /\b(os\.)?popen\s*\(/i, description: "System shell pipe (.popen)" },
+  { pattern: /__import__\s*\(['"]os['"]\)/i, description: "Dynamic OS module import (__import__)" },
+  { pattern: /importlib/i, description: "Dynamic module import (importlib)" },
   { pattern: /subprocess\.(run|Popen|call|check_output)\s*\(/i, description: "Python subprocess execution" },
   { pattern: /shutil\.rmtree\s*\(/i, description: "Python recursive filesystem wipe (shutil.rmtree)" },
   { pattern: /child_process/i, description: "Node.js child_process invocation" },
@@ -219,16 +222,28 @@ export interface BashAnalysis {
 export function normalizeCommand(raw: string): string {
   let cleaned = raw.trim().replace(/\0/g, "");
 
-  // 1. Unescape backslashes before characters (e.g. \r\m -> rm)
+  // 1. Substitute shell $IFS word-splitting primitive ($IFS, ${IFS}) with a space
+  cleaned = cleaned.replace(/\$(IFS\b|\{IFS\})/g, " ");
+
+  // 2. Expand simple brace expansions: e.g. /{etc,usr,home} -> /etc /usr /home
+  cleaned = cleaned.replace(/([^\s]+)\{([^{}]+)\}([^\s]*)/g, (match, prefix, inner, suffix) => {
+    const items = inner.split(",");
+    if (items.length > 1) {
+      return items.map((item: string) => `${prefix}${item}${suffix}`).join(" ");
+    }
+    return match;
+  });
+
+  // 3. Unescape backslashes before characters (e.g. \r\m -> rm)
   cleaned = cleaned.replace(/\\([a-zA-Z0-9_.\-\/])/g, "$1");
 
-  // 2. Token-level quote stripping: within whitespace-delimited tokens, remove internal quotes
+  // 4. Token-level quote stripping: within whitespace-delimited tokens, remove internal quotes
   cleaned = cleaned.replace(/\S+/g, (word) => {
     // If the word contains quotes, strip single and double quotes to form canonical word
     return word.replace(/['"]/g, "");
   });
 
-  // 3. Resolve variable assignments: X=rm; $X -rf /
+  // 5. Resolve variable assignments: X=rm; $X -rf /
   const varMap: Record<string, string> = {};
   const assignRegex = /(?:export\s+)?([a-zA-Z_][a-zA-Z0-9_]*)=([^\s;]+)/g;
   let m: RegExpExecArray | null;
@@ -302,15 +317,17 @@ export function analyzeBashCommand(rawCommand: string, mandate: Mandate): BashAn
         }
       }
 
-      // Recursively analyze inner command if it contains shell-like strings
-      const innerCmdMatch = scriptBody.match(/['"](.*?)['"]/);
-      if (innerCmdMatch && innerCmdMatch[1]) {
-        const innerAnalysis = analyzeBashCommand(innerCmdMatch[1], mandate);
-        for (const v of innerAnalysis.violations) {
-          violations.push({
-            ...v,
-            description: `Interpreter payload violation: ${v.description}`,
-          });
+      // Recursively extract all quoted strings in script body and analyze each
+      const innerStrings = [...scriptBody.matchAll(/['"]([^'"]+)['"]/g)].map((m) => m[1]);
+      for (const innerStr of innerStrings) {
+        if (innerStr.trim().length > 1) {
+          const innerAnalysis = analyzeBashCommand(innerStr, mandate);
+          for (const v of innerAnalysis.violations) {
+            violations.push({
+              ...v,
+              description: `Interpreter payload violation: ${v.description}`,
+            });
+          }
         }
       }
     }

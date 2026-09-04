@@ -3,7 +3,7 @@
   "name": "aletheia-mcp",
   "displayName": "Aletheia Runtime Safety & Scope Creep Filter",
   "description": "Sub-millisecond runtime safety interceptor & Signature S3 (Scope Creep) filter for AI agent tool calls. Blocks destructive actions, credential exfiltration, and out-of-boundary mutations before execution.",
-  "version": "1.0.0",
+  "version": "0.2.0",
   "author": "Vikas Shivpuriya <vikas.ny30@gmail.com>",
   "homepage": "https://github.com/vikasny30/aletheia-mcp",
   "repository": {

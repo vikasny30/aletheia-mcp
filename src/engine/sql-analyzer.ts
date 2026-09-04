@@ -47,7 +47,12 @@ export interface SqlAnalysis {
 }
 
 export function analyzeSqlQuery(rawSql: string, mandate: Mandate): SqlAnalysis {
-  const normalized = rawSql.trim().replace(/\s+/g, " ");
+  // Strip inline SQL comments:
+  // 1. Collapse split keywords: DR/**/OP -> DROP
+  let stripped = rawSql.replace(/([a-zA-Z0-9_])\/\*[\s\S]*?\*\/([a-zA-Z0-9_])/g, "$1$2");
+  // 2. Replace remaining multi-line and single-line comments with spaces
+  stripped = stripped.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/--.*$/gm, " ");
+  const normalized = stripped.trim().replace(/\s+/g, " ");
   const violations: Violation[] = [];
 
   // Determine statement type

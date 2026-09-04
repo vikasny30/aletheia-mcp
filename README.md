@@ -50,7 +50,7 @@ Existing defenses rely on LLM-as-a-judge evaluators that add **1,500–3,000 ms*
 
 ## Performance Benchmarks
 
-Measured on 10,000 consecutive multi-domain evaluations (Bash de-obfuscation, SQL AST, path verification, SSRF check, prompt injection):
+Measured on 10,000 consecutive multi-domain evaluations (Bash de-obfuscation, SQL pattern validation, path verification, SSRF check, prompt injection):
 
 | Metric | Measured Value | Target |
 | :--- | :--- | :--- |
