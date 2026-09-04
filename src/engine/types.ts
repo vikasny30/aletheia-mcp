@@ -45,6 +45,7 @@ export interface Mandate {
   allowWrite: boolean;
   allowDestructive: boolean;
   allowNetwork: boolean;
+  allowLoopback?: boolean;
   allowSubshells: boolean;
   riskTolerance: RiskTolerance;
   operatorSecret?: string; // Optional operator secret required to loosen boundaries

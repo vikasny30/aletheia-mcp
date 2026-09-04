@@ -420,7 +420,7 @@ export function analyzeBashCommand(rawCommand: string, mandate: Mandate): BashAn
       severity: "HIGH",
       description: "Filesystem write / redirection detected under a read-only mandate",
       evidence: rawCommand.slice(0, 120),
-      remediation: "The active session mandate permits only read operations. Set allowWrite=true to authorize modifications.",
+      remediation: "The active session mandate permits only read operations. Enabling allowWrite requires operator authorization (operatorSecret); agents cannot self-authorize write access.",
     });
   }
 
@@ -431,7 +431,7 @@ export function analyzeBashCommand(rawCommand: string, mandate: Mandate): BashAn
       severity: "HIGH",
       description: "Outbound network command detected under a local-only mandate",
       evidence: rawCommand.slice(0, 120),
-      remediation: "The active mandate forbids network egress. Set allowNetwork=true to enable internet access.",
+      remediation: "The active mandate forbids network egress. Enabling allowNetwork requires operator authorization (operatorSecret); agents cannot self-authorize network access.",
     });
   }
 

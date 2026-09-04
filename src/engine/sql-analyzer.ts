@@ -149,7 +149,7 @@ export function analyzeSqlQuery(rawSql: string, mandate: Mandate): SqlAnalysis {
       severity: "HIGH",
       description: "SQL data/schema write attempt rejected under read-only mandate",
       evidence: normalized.slice(0, 100),
-      remediation: "The active session mandate allows SELECT only. Enable allowWrite to execute mutations.",
+      remediation: "The active session mandate allows SELECT only. Enabling allowWrite requires operator authorization (operatorSecret); agents cannot self-authorize database mutations.",
     });
   }
 

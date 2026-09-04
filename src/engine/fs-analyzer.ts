@@ -103,7 +103,7 @@ export function analyzePath(candidatePath: string, mandate: Mandate, isWrite: bo
       severity: "HIGH",
       description: `Write operation on '${candidatePath}' rejected under read-only mandate`,
       evidence: candidatePath,
-      remediation: "Active mandate does not permit write mutations. Update mandate with allowWrite=true to proceed.",
+      remediation: "Active mandate permits read-only operations. Enabling allowWrite requires operator authorization (operatorSecret); agents cannot self-authorize write access.",
     });
   }
 

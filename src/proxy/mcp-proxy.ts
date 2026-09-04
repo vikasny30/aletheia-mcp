@@ -40,27 +40,58 @@ export class McpProxyGateway {
       throw new Error("Failed to attach stdio pipes to downstream MCP server");
     }
 
-    // Signal forwarding: propagate SIGINT/SIGTERM to downstream server to prevent zombie processes
+    // Signal forwarding: propagate SIGINT/SIGTERM to downstream server with supervised wait and SIGKILL escalation
+    let isShuttingDown = false;
     const forwardSignal = (signal: NodeJS.Signals) => {
-      if (this.childProcess && !this.childProcess.killed) {
-        this.childProcess.kill(signal);
+      if (isShuttingDown) return;
+      isShuttingDown = true;
+
+      if (!this.childProcess || this.childProcess.killed) {
+        process.exit(0);
+        return;
       }
-      process.exit(0);
+
+      // Send initial graceful termination signal
+      try {
+        this.childProcess.kill(signal);
+      } catch {}
+
+      // Supervised wait: escalate to SIGKILL if child has not exited within 5 seconds
+      const killTimer = setTimeout(() => {
+        if (this.childProcess && !this.childProcess.killed) {
+          console.error(`[Aletheia Proxy] Downstream process did not exit within timeout; escalating to SIGKILL`);
+          try {
+            this.childProcess.kill("SIGKILL");
+          } catch {}
+        }
+        process.exit(1);
+      }, 5000);
+
+      if (killTimer.unref) killTimer.unref();
+
+      // Clean exit when child process confirms termination
+      this.childProcess.once("exit", (code) => {
+        clearTimeout(killTimer);
+        process.exit(code || 0);
+      });
     };
     process.on("SIGINT", () => forwardSignal("SIGINT"));
     process.on("SIGTERM", () => forwardSignal("SIGTERM"));
 
-    // Read lines from downstream MCP stdout and forward to client stdout with backpressure handling
+    // Read lines from downstream MCP stdout and forward to client stdout with single-listener backpressure handling
     const downstreamReader = readline.createInterface({
       input: this.childProcess.stdout,
       terminal: false,
     });
 
+    let isStdoutDraining = false;
     downstreamReader.on("line", (line) => {
       const ok = process.stdout.write(line + "\n");
-      if (!ok && this.childProcess?.stdout) {
+      if (!ok && this.childProcess?.stdout && !isStdoutDraining) {
+        isStdoutDraining = true;
         this.childProcess.stdout.pause();
         process.stdout.once("drain", () => {
+          isStdoutDraining = false;
           this.childProcess?.stdout?.resume();
         });
       }

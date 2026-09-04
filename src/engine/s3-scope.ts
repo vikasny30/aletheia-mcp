@@ -33,6 +33,7 @@ export function isLooseningMandate(
   if (requested.allowWrite === true && !current.allowWrite) return true;
   if (requested.allowDestructive === true && !current.allowDestructive) return true;
   if (requested.allowNetwork === true && !current.allowNetwork) return true;
+  if (requested.allowLoopback === true && !current.allowLoopback) return true;
   if (requested.allowSubshells === true && !current.allowSubshells) return true;
 
   // 2. Risk tolerance loosening
@@ -100,6 +101,7 @@ export const DEFAULT_MANDATE: Mandate = {
   allowWrite: false, // Read-only by default for maximum agent safety
   allowDestructive: false,
   allowNetwork: false,
+  allowLoopback: false,
   allowSubshells: false,
   riskTolerance: "low",
   isLocked: true, // Mandate escalation locked against autonomous tampering
@@ -213,6 +215,7 @@ export class S3ScopeEvaluator {
           delete sanitized.allowWrite;
           delete sanitized.allowDestructive;
           delete sanitized.allowNetwork;
+          delete sanitized.allowLoopback;
           delete sanitized.allowSubshells;
           delete sanitized.riskTolerance;
           delete sanitized.allowedPaths;
