@@ -9,13 +9,51 @@
 import { spawn, ChildProcess } from "node:child_process";
 import readline from "node:readline";
 import { S3ScopeEvaluator } from "../engine/s3-scope.js";
+import { registerTools } from "../tools/index.js";
+import { registerResources } from "../resources/index.js";
+import { registerPrompts } from "../prompts/index.js";
+
+type PendingRequestType = "initialize" | "tools" | "resources" | "prompts";
 
 export class McpProxyGateway {
   private childProcess: ChildProcess | null = null;
   private evaluator: S3ScopeEvaluator;
 
+  // Aletheia's own tools/resources/prompts, so they remain reachable when Aletheia
+  // is wrapping a downstream server rather than running standalone.
+  private toolDefinitions: any[];
+  private handleToolCall: (name: string, args: Record<string, unknown>) => Promise<any>;
+  private aletheiaToolNames: Set<string>;
+
+  private resourceDefinitions: any[];
+  private handleResourceRead: (uri: string) => any;
+  private aletheiaResourceUris: Set<string>;
+
+  private promptDefinitions: any[];
+  private handlePromptGet: (name: string, args: Record<string, string>) => any;
+  private aletheiaPromptNames: Set<string>;
+
+  // Tracks client-issued initialize/list requests awaiting a downstream response,
+  // so that response can be merged with Aletheia's own definitions before relaying it.
+  private pendingRequests = new Map<string | number, PendingRequestType>();
+
   constructor(evaluator: S3ScopeEvaluator) {
     this.evaluator = evaluator;
+
+    const tools = registerTools(evaluator);
+    this.toolDefinitions = tools.toolDefinitions;
+    this.handleToolCall = tools.handleCall;
+    this.aletheiaToolNames = new Set(this.toolDefinitions.map((t: any) => t.name));
+
+    const resources = registerResources(evaluator);
+    this.resourceDefinitions = resources.resourceDefinitions;
+    this.handleResourceRead = resources.handleRead;
+    this.aletheiaResourceUris = new Set(this.resourceDefinitions.map((r: any) => r.uri));
+
+    const prompts = registerPrompts();
+    this.promptDefinitions = prompts.promptDefinitions;
+    this.handlePromptGet = prompts.handleGet;
+    this.aletheiaPromptNames = new Set(this.promptDefinitions.map((p: any) => p.name));
   }
 
   public start(downstreamCommand: string, downstreamArgs: string[] = []) {
@@ -86,7 +124,8 @@ export class McpProxyGateway {
 
     let isStdoutDraining = false;
     downstreamReader.on("line", (line) => {
-      const ok = process.stdout.write(line + "\n");
+      const outLine = this.mergeAletheiaIntoDownstreamResponse(line);
+      const ok = process.stdout.write(outLine + "\n");
       if (!ok && this.childProcess?.stdout && !isStdoutDraining) {
         isStdoutDraining = true;
         this.childProcess.stdout.pause();
@@ -111,6 +150,127 @@ export class McpProxyGateway {
       console.error(`[Aletheia Proxy] Downstream process exited with code ${code}`);
       process.exit(code || 0);
     });
+  }
+
+  /**
+   * Merges Aletheia's own tools/resources/prompts (and capability flags) into a
+   * downstream response the client is waiting on, if that response corresponds to
+   * an initialize/list request this proxy is tracking. Otherwise passes the line
+   * through unchanged. Ensures Aletheia's meta-tools, resources, and prompts stay
+   * reachable even when Aletheia is only wrapping a downstream server, not running
+   * standalone.
+   */
+  private mergeAletheiaIntoDownstreamResponse(line: string): string {
+    let parsed: any;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      return line;
+    }
+
+    if (!parsed || parsed.id === undefined || !this.pendingRequests.has(parsed.id)) {
+      return line;
+    }
+
+    const type = this.pendingRequests.get(parsed.id)!;
+    this.pendingRequests.delete(parsed.id);
+
+    if (type === "initialize") {
+      if (parsed.result) {
+        parsed.result.capabilities = parsed.result.capabilities || {};
+        parsed.result.capabilities.tools = parsed.result.capabilities.tools || {};
+        parsed.result.capabilities.resources = parsed.result.capabilities.resources || {};
+        parsed.result.capabilities.prompts = parsed.result.capabilities.prompts || {};
+        return JSON.stringify(parsed);
+      }
+      return line;
+    }
+
+    // For list methods: if the downstream understood the request, append Aletheia's
+    // own definitions to the result. If the downstream doesn't implement the method
+    // at all (e.g. a minimal server with no resources/prompts support), it will have
+    // returned a "Method not found" error -- since Aletheia itself DOES support the
+    // method, synthesize a successful response containing just Aletheia's entries
+    // rather than propagating the downstream's error to the client.
+    if (type === "tools") {
+      if (parsed.result) {
+        parsed.result.tools = [...(parsed.result.tools || []), ...this.toolDefinitions];
+        return JSON.stringify(parsed);
+      }
+      if (parsed.error) {
+        return JSON.stringify({ jsonrpc: "2.0", id: parsed.id, result: { tools: this.toolDefinitions } });
+      }
+    } else if (type === "resources") {
+      if (parsed.result) {
+        parsed.result.resources = [...(parsed.result.resources || []), ...this.resourceDefinitions];
+        return JSON.stringify(parsed);
+      }
+      if (parsed.error) {
+        return JSON.stringify({ jsonrpc: "2.0", id: parsed.id, result: { resources: this.resourceDefinitions } });
+      }
+    } else if (type === "prompts") {
+      if (parsed.result) {
+        parsed.result.prompts = [...(parsed.result.prompts || []), ...this.promptDefinitions];
+        return JSON.stringify(parsed);
+      }
+      if (parsed.error) {
+        return JSON.stringify({ jsonrpc: "2.0", id: parsed.id, result: { prompts: this.promptDefinitions } });
+      }
+    }
+
+    return line;
+  }
+
+  /** Handles a tools/call targeting one of Aletheia's own tools, entirely locally. */
+  private handleAletheiaToolCall(message: any, sendClient: (data: string) => void) {
+    const toolName = String(message.params.name);
+    const toolArgs = (message.params.arguments as Record<string, unknown>) || {};
+    this.handleToolCall(toolName, toolArgs)
+      .then((result) => {
+        sendClient(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }) + "\n");
+      })
+      .catch((err: unknown) => {
+        sendClient(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: message.id,
+            error: { code: -32603, message: `Aletheia tool execution error: ${(err as Error).message}` },
+          }) + "\n"
+        );
+      });
+  }
+
+  /** Handles a resources/read targeting one of Aletheia's own resources, entirely locally. */
+  private handleAletheiaResourceRead(message: any, sendClient: (data: string) => void) {
+    try {
+      const result = this.handleResourceRead(String(message.params.uri));
+      sendClient(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }) + "\n");
+    } catch (err: unknown) {
+      sendClient(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: message.id,
+          error: { code: -32602, message: `Aletheia resource error: ${(err as Error).message}` },
+        }) + "\n"
+      );
+    }
+  }
+
+  /** Handles a prompts/get targeting one of Aletheia's own prompts, entirely locally. */
+  private handleAletheiaPromptGet(message: any, sendClient: (data: string) => void) {
+    try {
+      const args = (message.params.arguments as Record<string, string>) || {};
+      const result = this.handlePromptGet(String(message.params.name), args);
+      sendClient(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }) + "\n");
+    } catch (err: unknown) {
+      sendClient(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: message.id,
+          error: { code: -32602, message: `Aletheia prompt error: ${(err as Error).message}` },
+        }) + "\n"
+      );
+    }
   }
 
   private evaluateSingleToolCall(call: any): { isBlocked: boolean; response: any } | null {
@@ -232,6 +392,33 @@ export class McpProxyGateway {
       // Non-JSON line or framing data - forward transparently to downstream
       sendDownstream(line + "\n");
       return;
+    }
+
+    // Track initialize/list requests so the matching downstream response can be
+    // merged with Aletheia's own tools/resources/prompts before reaching the client.
+    if (!Array.isArray(message) && message.id !== undefined && typeof message.method === "string") {
+      if (message.method === "initialize") this.pendingRequests.set(message.id, "initialize");
+      else if (message.method === "tools/list") this.pendingRequests.set(message.id, "tools");
+      else if (message.method === "resources/list") this.pendingRequests.set(message.id, "resources");
+      else if (message.method === "prompts/list") this.pendingRequests.set(message.id, "prompts");
+    }
+
+    // Requests targeting one of Aletheia's own tools/resources/prompts are handled
+    // entirely locally -- they never reach the downstream server, so they remain
+    // reachable whether Aletheia is running standalone or wrapping another server.
+    if (!Array.isArray(message) && message.params) {
+      if (message.method === "tools/call" && this.aletheiaToolNames.has(String(message.params.name))) {
+        this.handleAletheiaToolCall(message, sendClient);
+        return;
+      }
+      if (message.method === "resources/read" && this.aletheiaResourceUris.has(String(message.params.uri))) {
+        this.handleAletheiaResourceRead(message, sendClient);
+        return;
+      }
+      if (message.method === "prompts/get" && this.aletheiaPromptNames.has(String(message.params.name))) {
+        this.handleAletheiaPromptGet(message, sendClient);
+        return;
+      }
     }
 
     // Handle JSON-RPC 2.0 Batch Requests (array of message objects)
