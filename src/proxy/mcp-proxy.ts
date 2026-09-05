@@ -119,10 +119,7 @@ export class McpProxyGateway {
     }
 
     const toolName = String(call.params.name || "");
-    const toolArgs =
-      call.params.arguments && typeof call.params.arguments === "object"
-        ? call.params.arguments
-        : {};
+    const toolArgs = call.params.arguments !== undefined ? call.params.arguments : {};
 
     let assessment;
     try {

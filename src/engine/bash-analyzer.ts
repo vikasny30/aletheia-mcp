@@ -32,6 +32,7 @@ const SENSITIVE_PATH_PATTERNS = [
   /(^|[^a-zA-Z0-9_.-])~?\.?terraform\.d(\/[a-z0-9_.-]+)?\/*(?![a-z0-9_.\-])/i,
   /(^|[^a-zA-Z0-9_.-])\/etc\/(shadow|passwd|master\.passwd|sudoers)\/*(?![a-z0-9_.\-])/i,
   /(^|[^a-zA-Z0-9_.-])\/proc\/kcore\/*(?![a-z0-9_.\-])/i,
+  /(^|[^a-zA-Z0-9_.-])\/proc\/[^\s;&|<>]+\/environ\/*(?![a-z0-9_.\-])/i,
 ];
 
 // Destructive command signatures (High blast radius)
@@ -142,9 +143,13 @@ const OBFUSCATION_PATTERNS: Array<{
     description: "Remote payload download directly piped into shell execution",
   },
   {
-    // base64, openssl enc, xxd -r piped to shell with arbitrary flag ordering
-    pattern: /(echo\s+[A-Za-z0-9+/=]{8,}\s*\|\s*)?(base64\b[^|]*(?:-[a-z0-9]*d\b|--decode\b)|openssl\b[^|]*(?:-d\b[^|]*-base64|-base64\b[^|]*-d|-d\b[^|]*-a\b|-a\b[^|]*-d)|xxd\b[^|]*-r\b)[^|]*\|\s*(ba|z)?sh\b/i,
-    description: "Encoded string or cipher payload piped directly into execution shell",
+    // base64, openssl enc, xxd -r piped to shell or interpreter with arbitrary flag ordering
+    pattern: /(echo\s+[A-Za-z0-9+/=]{8,}\s*\|\s*)?(base64\b[^|]*(?:-[a-z0-9]*d\b|--decode\b)|openssl\b[^|]*(?:-d\b[^|]*-base64|-base64\b[^|]*-d|-d\b[^|]*-a\b|-a\b[^|]*-d)|xxd\b[^|]*-r\b)[^|]*\|\s*((?:ba|z|da)?sh|python[23]?|perl|ruby|node|pypy[23]?)\b/i,
+    description: "Encoded string or cipher payload piped directly into execution shell or interpreter",
+  },
+  {
+    pattern: /\bprintf\s+[^|]*\\[xX0-9][^|]*\|\s*((?:ba|z|da)?sh|python[23]?|perl|ruby|node|pypy[23]?)\b/i,
+    description: "Printf escaped character sequence piped into execution shell or interpreter",
   },
   {
     pattern: /\$\(\s*echo\s+[A-Za-z0-9+/=]{8,}\s*\|\s*base64\s+(-d|--decode)\s*\)/i,
@@ -240,6 +245,10 @@ const EXFILTRATION_PATTERNS: Array<{
     pattern: /\bsocat\s+[^\n;&|]*?\b([a-z0-9_-]+:[^\s]+)/i,
     description: "Socat reverse shell / raw socket exfiltration channel",
   },
+  {
+    pattern: /\bgit\s+push\s+[^\n;&|]*?(https?:\/\/|git@|ssh:\/\/|git:\/\/|[a-zA-Z0-9-]+\.[a-zA-Z0-9_.-]+:)/i,
+    description: "Outbound git push to external repository / remote exfiltration",
+  },
 ];
 
 // Mutation indicators (redirects and file alteration)
@@ -249,7 +258,7 @@ const MUTATION_PATTERNS = [
 ];
 
 // Network indicators (including bash /dev/tcp and /dev/udp pseudo-devices)
-const NETWORK_COMMANDS = /\b(curl|wget|fetch|nc|ncat|netcat|socat|ssh|scp|sftp|ftp|rsync|ping|nmap|telnet|dig|nslookup)\b|\/dev\/(?:tcp|udp)\//i;
+const NETWORK_COMMANDS = /\b(curl|wget|fetch|nc|ncat|netcat|socat|ssh|scp|sftp|ftp|rsync|ping|nmap|telnet|dig|nslookup)\b|\bgit\s+(push|pull|fetch|clone)\b|\/dev\/(?:tcp|udp)\//i;
 
 // Cloud instance metadata patterns directly detectable in shell commands (dotted, decimal, hex, octal, and IPv6)
 const BASH_METADATA_PATTERNS = [

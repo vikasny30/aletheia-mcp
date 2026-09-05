@@ -75,7 +75,7 @@ export interface AuditRecord {
   id: string;
   timestamp: number;
   toolName: string;
-  rawInput: Record<string, unknown>;
+  rawInput: unknown;
   verdict: Verdict;
   riskScore: number;
   violationsCount: number;

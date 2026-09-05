@@ -109,7 +109,11 @@ export function analyzePath(candidatePathInput: unknown, mandate: Mandate, isWri
     rawResolved.includes("/.gnupg/") ||
     rawResolved.includes("/.oci/") ||
     rawResolved.includes("/.azure/") ||
-    rawResolved.includes("/.terraform.d/")
+    rawResolved.includes("/.terraform.d/") ||
+    (resolved.includes("/proc/") && resolved.includes("/environ")) ||
+    (rawResolved.includes("/proc/") && rawResolved.includes("/environ")) ||
+    resolved.includes("/proc/kcore") ||
+    rawResolved.includes("/proc/kcore")
   ) {
     violations.push({
       signature: "S3",

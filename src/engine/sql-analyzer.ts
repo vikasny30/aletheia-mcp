@@ -43,8 +43,8 @@ const SQL_SYSTEM_ESCAPE_PATTERNS: Array<{
     description: "Database command execution via COPY PROGRAM (PostgreSQL)",
   },
   {
-    pattern: /\b(pg_read_file|pg_read_binary_file|pg_write_file|lo_import|lo_export)\s*\(/i,
-    description: "Database filesystem access function pg_read_file / lo_import (PostgreSQL)",
+    pattern: /(?:`|['"])?(?:pg_read_file|pg_read_binary_file|pg_write_file|lo_import|lo_export|lo_get|lo_put|load_file)(?:`|['"])?\s*\(/i,
+    description: "Database filesystem / large-object access function (pg_read_file / load_file / lo_get)",
   },
   {
     pattern: /\bLOAD\s+DATA\s+(?:LOCAL\s+)?INFILE\b/i,
@@ -168,7 +168,7 @@ export function analyzeSqlQuery(rawSqlInput: unknown, mandate: Mandate): SqlAnal
   const hasDelete = /\bDELETE\s+FROM\b/i.test(repSpace) || /\bDELETE\s+FROM\b/i.test(repCollapsed);
   const hasUpdate = /\bUPDATE\s+\S+\s+SET\b/i.test(repSpace) || /\bUPDATE\s+\S+\s+SET\b/i.test(repCollapsed);
 
-  const isWriteAttempt = hasDelete || hasUpdate || WRITE_STATEMENTS.test(repSpace) || WRITE_STATEMENTS.test(repCollapsed) || statementType === "DDL";
+  let isWriteAttempt = hasDelete || hasUpdate || WRITE_STATEMENTS.test(repSpace) || WRITE_STATEMENTS.test(repCollapsed) || statementType === "DDL";
   const hasWhereClause = /\bWHERE\b/i.test(repSpace) || /\bWHERE\b/i.test(repCollapsed);
   const isTautological = hasWhereClause && (TAUTOLOGICAL_WHERE_PATTERN.test(repSpace) || TAUTOLOGICAL_WHERE_PATTERN.test(repCollapsed));
 
@@ -183,6 +183,26 @@ export function analyzeSqlQuery(rawSqlInput: unknown, mandate: Mandate): SqlAnal
         evidence: (pattern.test(repSpace) ? repSpace : repCollapsed).slice(0, 100),
         remediation: "Destructive schema and data drops are blocked in agent execution mode.",
       });
+    }
+  }
+
+  // 1.5. Inspect dynamic SQL execution functions (query_to_xml, dblink, sp_executesql, EXECUTE IMMEDIATE)
+  const dynamicSqlRegex =
+    /(?:query_to_xml\w*|cursor_to_xml\w*|dblink\w*|EXECUTE(?:\s+IMMEDIATE)?|sp_executesql)\s*(?:\(\s*N?|N?)(['"])([\s\S]*?)\1/gi;
+  for (const match of rawSql.matchAll(dynamicSqlRegex)) {
+    const innerSql = match[2];
+    if (innerSql && innerSql.trim().length > 2) {
+      const innerAnalysis = analyzeSqlQuery(innerSql, mandate);
+      for (const v of innerAnalysis.violations) {
+        violations.push({
+          ...v,
+          description: `Dynamic SQL argument violation (${v.type}): ${v.description}`,
+        });
+      }
+      if (innerAnalysis.isWriteAttempt) {
+        // Bubble up write attempt indicator
+        isWriteAttempt = true;
+      }
     }
   }
 

@@ -184,12 +184,46 @@ export class S3ScopeEvaluator {
    */
   public evaluate(
     toolName: string,
-    args: Record<string, unknown> = {},
+    rawArgs: unknown = {},
     sessionOverride?: Partial<Mandate>
   ): AssessmentResult {
     const t0 = performance.now();
     const violations: Violation[] = [];
-    const safeArgs = args && typeof args === "object" ? args : {};
+
+    // Normalize rawArgs into safeArgs dictionary while preserving string/array inputs
+    let safeArgs: Record<string, unknown>;
+    if (typeof rawArgs === "string") {
+      safeArgs = {
+        command: rawArgs,
+        cmd: rawArgs,
+        query: rawArgs,
+        sql: rawArgs,
+        path: rawArgs,
+        url: rawArgs,
+        prompt: rawArgs,
+        rawStringArgument: rawArgs,
+      };
+    } else if (rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)) {
+      safeArgs = rawArgs as Record<string, unknown>;
+    } else if (Array.isArray(rawArgs)) {
+      const joined = rawArgs.map((x) => String(x ?? "")).join(" ");
+      safeArgs = {
+        command: joined,
+        query: joined,
+        path: joined,
+        rawStringArgument: joined,
+      };
+    } else if (rawArgs !== undefined && rawArgs !== null) {
+      const strVal = String(rawArgs);
+      safeArgs = {
+        command: strVal,
+        query: strVal,
+        path: strVal,
+        rawStringArgument: strVal,
+      };
+    } else {
+      safeArgs = {};
+    }
     let effectiveMandate = this.mandate;
 
     if (sessionOverride) {
@@ -525,7 +559,7 @@ export class S3ScopeEvaluator {
       id: `eval_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       timestamp: result.timestamp,
       toolName,
-      rawInput: args,
+      rawInput: rawArgs,
       verdict,
       riskScore: result.riskScore,
       violationsCount: violations.length,
