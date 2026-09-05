@@ -385,7 +385,7 @@ export class S3ScopeEvaluator {
         if (trimmed.length > 2) {
           // Check if string contains shell commands or shell syntax
           const looksLikeShell =
-            /\b(rm|git|cat|chmod|find|curl|wget|python|node|sh|bash|sudo|dd|kill|shred|rsync|ruby|perl|php)\b|[|;&]|>>?/i.test(
+            /\b(rm|git|cat|chmod|find|curl|wget|python|node|sh|bash|sudo|dd|kill|shred|rsync|ruby|perl|php|ftp|sftp|scp|nc|ncat|netcat|socat)\b|[|;&]|>>?/i.test(
               trimmed
             );
           if (looksLikeShell) {

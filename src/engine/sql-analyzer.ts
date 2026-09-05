@@ -7,6 +7,7 @@
  */
 
 import { Violation, Mandate } from "./types.js";
+import { analyzeUrl } from "./network-analyzer.js";
 
 const DESTRUCTIVE_DDL_PATTERNS = [
   {
@@ -61,6 +62,31 @@ const SQL_SYSTEM_ESCAPE_PATTERNS: Array<{
     pattern: /\bxp_cmdshell\b/i,
     description: "Operating system command execution via xp_cmdshell",
   },
+  {
+    pattern: /\bload_extension\s*\(/i,
+    description: "SQLite dynamic library / extension loading (load_extension)",
+  },
+  {
+    pattern: /\b(DBMS_LOB\.(?:LOADFROMFILE|LOADBLOBFROMFILE)|DBMS_SCHEDULER\b|DBMS_JAVA\b|UTL_FILE\b|UTL_HTTP\b|UTL_TCP\b|UTL_SMTP\b)/i,
+    description: "Database procedural package escape (Oracle DBMS_LOB / DBMS_SCHEDULER / UTL_HTTP / UTL_FILE)",
+  },
+  {
+    pattern: /\b(OPENROWSET|OPENDATASOURCE|dblink)\s*\(/i,
+    description: "Database external query / distributed command primitive (OPENROWSET / dblink)",
+  },
+];
+
+// Cloud instance metadata patterns directly detectable in SQL queries (dotted, decimal, hex, octal, and IPv6)
+const SQL_METADATA_PATTERNS = [
+  /\b169\.254\.169\.254\b/,
+  /\bmetadata\.google\.internal\b/i,
+  /\b169\.254\.170\.2\b/,
+  /\[::ffff:(?:169\.254\.169\.254|[0-9a-f]{1,4}:[0-9a-f]{1,4})\]/i,
+  /\b2852039166\b/,
+  /\b2852039170\b/,
+  /\b0xa9fea9fe\b/i,
+  /\b0xa9\.0xfe\.0xa9\.0xfe\b/i,
+  /\b0251\.0376\.0251\.0376\b/,
 ];
 
 // Tautological predicate patterns that fake a bounded WHERE clause
@@ -215,6 +241,37 @@ export function analyzeSqlQuery(rawSqlInput: unknown, mandate: Mandate): SqlAnal
         remediation: "Database OS execution and filesystem access primitives are strictly prohibited in agent execution mode.",
       });
       break;
+    }
+  }
+
+  // 3.6. Check Direct Cloud Instance Metadata in SQL query
+  for (const metaPattern of SQL_METADATA_PATTERNS) {
+    if (metaPattern.test(rawSql) || metaPattern.test(repSpace) || metaPattern.test(repCollapsed)) {
+      violations.push({
+        signature: "S3",
+        type: "UNAUTHORIZED_NETWORK_EGRESS",
+        severity: "CRITICAL",
+        description: "Cloud instance metadata access detected in SQL query",
+        evidence: rawSql.slice(0, 120),
+        remediation: "Requests to cloud metadata endpoints (AWS/GCP/Azure) are strictly prohibited to prevent credential exfiltration.",
+      });
+      break;
+    }
+  }
+
+  // 3.7. Check Embedded URLs in SQL query for SSRF
+  if (rawSql.includes("http://") || rawSql.includes("https://")) {
+    const urlRegex = /https?:\/\/[^\s"'`<>\\;)]+/gi;
+    for (const match of rawSql.matchAll(urlRegex)) {
+      const urlRes = analyzeUrl(match[0], mandate);
+      for (const v of urlRes.violations) {
+        if (v.severity === "CRITICAL" || urlRes.isSSRF) {
+          violations.push({
+            ...v,
+            description: `SQL embedded URL SSRF violation: ${v.description}`,
+          });
+        }
+      }
     }
   }
 

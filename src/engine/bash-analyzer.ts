@@ -17,21 +17,21 @@ import { analyzeUrl } from "./network-analyzer.js";
 
 // Sensitive system and credential patterns
 const SENSITIVE_PATH_PATTERNS = [
-  /(^|\s|\/)\.env(\.[a-z0-9_-]+)?(\s|$)/i,
-  /(^|\s|\/)id_(rsa|ed25519|ecdsa|dsa)(\.pub)?(\s|$)/i,
-  /(^|\s|\/)~?\.?ssh(\/[a-z0-9_.-]+)?(\s|$)/i,
-  /(^|\s|\/)~?\.?aws\/(credentials|config)(\s|$)/i,
-  /(^|\s|\/)~?\.?config\/gcloud(\s|$)/i,
-  /(^|\s|\/)~?\.?kube\/config(\s|$)/i,
-  /(^|\s|\/)~?\.?npmrc(\s|$)/i,
-  /(^|\s|\/)~?\.?netrc(\s|$)/i,
-  /(^|\s|\/)~?\.?pgpass(\s|$)/i,
-  /(^|\s|\/)~?\.?vault-token(\s|$)/i,
-  /(^|\s|\/)~?\.?oci(\/[a-z0-9_.-]+)?(\s|$)/i,
-  /(^|\s|\/)~?\.?azure(\/[a-z0-9_.-]+)?(\s|$)/i,
-  /(^|\s|\/)~?\.?terraform\.d(\/[a-z0-9_.-]+)?(\s|$)/i,
-  /(^|\s|\/)\/etc\/(shadow|passwd|master\.passwd|sudoers)(\s|$)/i,
-  /(^|\s|\/)\/proc\/kcore(\s|$)/i,
+  /(^|[^a-zA-Z0-9_.-])\.env(\.[a-z0-9_-]+)?\/*(?![a-z0-9_.\-])/i,
+  /(^|[^a-zA-Z0-9_.-])id_(rsa|ed25519|ecdsa|dsa)(\.pub)?\/*(?![a-z0-9_.\-])/i,
+  /(^|[^a-zA-Z0-9_.-])~?\.?ssh(\/[a-z0-9_.-]+)?\/*(?![a-z0-9_.\-])/i,
+  /(^|[^a-zA-Z0-9_.-])~?\.?aws\/(credentials|config)\/*(?![a-z0-9_.\-])/i,
+  /(^|[^a-zA-Z0-9_.-])~?\.?config\/gcloud\/*(?![a-z0-9_.\-])/i,
+  /(^|[^a-zA-Z0-9_.-])~?\.?kube\/config\/*(?![a-z0-9_.\-])/i,
+  /(^|[^a-zA-Z0-9_.-])~?\.?npmrc\/*(?![a-z0-9_.\-])/i,
+  /(^|[^a-zA-Z0-9_.-])~?\.?netrc\/*(?![a-z0-9_.\-])/i,
+  /(^|[^a-zA-Z0-9_.-])~?\.?(?:pgpass|my\.cnf)\/*(?![a-z0-9_.\-])/i,
+  /(^|[^a-zA-Z0-9_.-])~?\.?vault-token\/*(?![a-z0-9_.\-])/i,
+  /(^|[^a-zA-Z0-9_.-])~?\.?oci(\/[a-z0-9_.-]+)?\/*(?![a-z0-9_.\-])/i,
+  /(^|[^a-zA-Z0-9_.-])~?\.?azure(\/[a-z0-9_.-]+)?\/*(?![a-z0-9_.\-])/i,
+  /(^|[^a-zA-Z0-9_.-])~?\.?terraform\.d(\/[a-z0-9_.-]+)?\/*(?![a-z0-9_.\-])/i,
+  /(^|[^a-zA-Z0-9_.-])\/etc\/(shadow|passwd|master\.passwd|sudoers)\/*(?![a-z0-9_.\-])/i,
+  /(^|[^a-zA-Z0-9_.-])\/proc\/kcore\/*(?![a-z0-9_.\-])/i,
 ];
 
 // Destructive command signatures (High blast radius)
@@ -142,8 +142,8 @@ const OBFUSCATION_PATTERNS: Array<{
     description: "Remote payload download directly piped into shell execution",
   },
   {
-    // base64, openssl enc, xxd -r piped to shell
-    pattern: /(echo\s+[A-Za-z0-9+/=]{8,}\s*\|\s*)?(base64\s+(-d|--decode)|openssl\s+(enc\s+)?-base64\s+-d|xxd\s+-r)\s*\|\s*(ba|z)?sh/i,
+    // base64, openssl enc, xxd -r piped to shell with arbitrary flag ordering
+    pattern: /(echo\s+[A-Za-z0-9+/=]{8,}\s*\|\s*)?(base64\b[^|]*(?:-[a-z0-9]*d\b|--decode\b)|openssl\b[^|]*(?:-d\b[^|]*-base64|-base64\b[^|]*-d|-d\b[^|]*-a\b|-a\b[^|]*-d)|xxd\b[^|]*-r\b)[^|]*\|\s*(ba|z)?sh\b/i,
     description: "Encoded string or cipher payload piped directly into execution shell",
   },
   {
@@ -217,8 +217,20 @@ const EXFILTRATION_PATTERNS: Array<{
   description: string;
 }> = [
   {
-    pattern: /\b(curl|wget)\s+.*(-d\s*@|-F\s*\S*=@|--data-binary\s*@|--post-file\s*|-T\s+\S|--upload-file(=|\s+)\S)/i,
+    pattern: /\b(curl|wget)\s+.*(-d\s*@|--data(-\S+)?(=|\s+)@|-F\s*\S*=@|--data-binary\s*@|--post-(?:file|data)(=|\s+)\S*@?|-T\s+\S|--upload-file(=|\s+)\S)/i,
     description: "Outbound HTTP file transmission / exfiltration pattern",
+  },
+  {
+    pattern: /\bftp\s+[^\n;&|]*(-u\b|--upload-file\b|\bput\b)/i,
+    description: "FTP file upload / exfiltration command",
+  },
+  {
+    pattern: /\bsftp\s+[^\n;&|]*(-b\b|\bput\b)/i,
+    description: "SFTP batch transfer / file upload exfiltration command",
+  },
+  {
+    pattern: /\b(scp|rsync)\s+[^\n;&|]*(-e\s+ssh\b|[a-zA-Z0-9_.+-]+@[a-zA-Z0-9_.-]+:[^\s;]+|\b[a-zA-Z0-9-]+\.[a-zA-Z0-9_.-]+:[a-zA-Z0-9_.\/~]+)/i,
+    description: "Remote scp/rsync network transmission exfiltration channel",
   },
   {
     pattern: /\b(nc|ncat|netcat)\s+[^\n;&|]*(-[a-z]*[ec][a-z]*\s+|\b\S+\s+\d+)/i,
@@ -237,7 +249,7 @@ const MUTATION_PATTERNS = [
 ];
 
 // Network indicators (including bash /dev/tcp and /dev/udp pseudo-devices)
-const NETWORK_COMMANDS = /\b(curl|wget|fetch|nc|ncat|netcat|socat|ssh|scp|sftp|rsync|ping|nmap|telnet|dig|nslookup)\b|\/dev\/(?:tcp|udp)\//i;
+const NETWORK_COMMANDS = /\b(curl|wget|fetch|nc|ncat|netcat|socat|ssh|scp|sftp|ftp|rsync|ping|nmap|telnet|dig|nslookup)\b|\/dev\/(?:tcp|udp)\//i;
 
 // Cloud instance metadata patterns directly detectable in shell commands (dotted, decimal, hex, octal, and IPv6)
 const BASH_METADATA_PATTERNS = [
@@ -371,9 +383,9 @@ export function normalizeCommand(raw: string): string {
  */
 export function extractAndDecodeBase64(command: string): string | null {
   const b64Match =
-    command.match(/base64\s+(-d|--decode)[^|]*\|\s*(ba|z)?sh/i) ||
+    command.match(/base64\b[^|]*(?:-[a-z0-9]*d|--decode)[^|]*\|\s*(ba|z)?sh/i) ||
     command.match(/echo\s+([A-Za-z0-9+/=]{8,})\s*\|\s*base64/i) ||
-    command.match(/openssl\s+(enc\s+)?-base64\s+-d\s*\|\s*(ba|z)?sh/i);
+    command.match(/openssl\b[^|]*(?:-base64\b[^|]*-d|-d\b[^|]*-base64)[^|]*\|\s*(ba|z)?sh/i);
 
   if (b64Match) {
     const rawPayload = command.match(/[A-Za-z0-9+/=]{8,}/);
