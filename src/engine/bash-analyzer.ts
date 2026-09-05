@@ -26,6 +26,10 @@ const SENSITIVE_PATH_PATTERNS = [
   /(^|\s|\/)~?\.?npmrc(\s|$)/i,
   /(^|\s|\/)~?\.?netrc(\s|$)/i,
   /(^|\s|\/)~?\.?pgpass(\s|$)/i,
+  /(^|\s|\/)~?\.?vault-token(\s|$)/i,
+  /(^|\s|\/)~?\.?oci(\/[a-z0-9_.-]+)?(\s|$)/i,
+  /(^|\s|\/)~?\.?azure(\/[a-z0-9_.-]+)?(\s|$)/i,
+  /(^|\s|\/)~?\.?terraform\.d(\/[a-z0-9_.-]+)?(\s|$)/i,
   /(^|\s|\/)\/etc\/(shadow|passwd|master\.passwd|sudoers)(\s|$)/i,
   /(^|\s|\/)\/proc\/kcore(\s|$)/i,
 ];
@@ -213,7 +217,7 @@ const EXFILTRATION_PATTERNS: Array<{
   description: string;
 }> = [
   {
-    pattern: /\b(curl|wget)\s+.*(-d\s*@|-F\s*\S*=@|--data-binary\s*@|--post-file\s*)/i,
+    pattern: /\b(curl|wget)\s+.*(-d\s*@|-F\s*\S*=@|--data-binary\s*@|--post-file\s*|-T\s+\S|--upload-file(=|\s+)\S)/i,
     description: "Outbound HTTP file transmission / exfiltration pattern",
   },
   {
@@ -327,11 +331,9 @@ export function normalizeCommand(raw: string): string {
     cleaned = cleaned.replace(/\\([a-zA-Z0-9_.\-\/])/g, "$1");
   }
 
-  // 4. Token-level quote stripping: within whitespace-delimited tokens, remove internal quotes
+  // 4. Token-level quote stripping: remove internal quotes without altering whitespace
   if (cleaned.includes("\"") || cleaned.includes("'")) {
-    cleaned = cleaned.replace(/\S+/g, (word) => {
-      return word.replace(/['"]/g, "");
-    });
+    cleaned = cleaned.replace(/['"]/g, "");
   }
 
   // 5. Resolve variable assignments and default parameter expansions:

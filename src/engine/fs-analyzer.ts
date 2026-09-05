@@ -31,6 +31,7 @@ const SENSITIVE_FILENAMES = new Set([
   ".netrc",
   ".pgpass",
   ".my.cnf",
+  ".vault-token",
   ".git-credentials",
   ".gitconfig",
 ]);
@@ -95,6 +96,9 @@ export function analyzePath(candidatePathInput: unknown, mandate: Mandate, isWri
     resolved.includes("/.kube/") ||
     resolved.includes("/.docker/") ||
     resolved.includes("/.gnupg/") ||
+    resolved.includes("/.oci/") ||
+    resolved.includes("/.azure/") ||
+    resolved.includes("/.terraform.d/") ||
     resolved.includes("/etc/shadow") ||
     resolved.includes("/etc/passwd") ||
     resolved.includes("/etc/sudoers") ||
@@ -102,7 +106,10 @@ export function analyzePath(candidatePathInput: unknown, mandate: Mandate, isWri
     rawResolved.includes("/.aws/") ||
     rawResolved.includes("/.kube/") ||
     rawResolved.includes("/.docker/") ||
-    rawResolved.includes("/.gnupg/")
+    rawResolved.includes("/.gnupg/") ||
+    rawResolved.includes("/.oci/") ||
+    rawResolved.includes("/.azure/") ||
+    rawResolved.includes("/.terraform.d/")
   ) {
     violations.push({
       signature: "S3",
