@@ -162,7 +162,7 @@ export function analyzePath(candidatePathInput: unknown, mandate: Mandate, isWri
       severity: "HIGH",
       description: `Write operation on '${candidatePath}' rejected under read-only mandate`,
       evidence: candidatePath,
-      remediation: "Active mandate permits read-only operations. Enabling allowWrite requires operator authorization (operatorSecret); agents cannot self-authorize write access.",
+      remediation: "Active mandate permits read-only operations. If this is a fresh install, restart the server with --allow-write (and --allowed-paths) to enable this permanently. To change an already-running session, the operator must supply operatorSecret; agents cannot self-authorize write access.",
     });
   }
 

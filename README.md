@@ -102,12 +102,17 @@ Measured on 10,000 consecutive multi-domain evaluations (Bash de-obfuscation, SQ
 
 ## Quickstart
 
+> [!TIP]
+> **By default, Aletheia starts fully locked down (read-only, no network, no loopback) and stays that way — on purpose.** If your agent needs to write files or make network calls, grant that up front with `--allow-write` / `--allow-network` / `--allow-loopback` (and scope writes to a directory with `--allowed-paths`), as shown below. These flags set the **initial** mandate at server startup and are not gated by `operatorSecret` — that gate only applies to changing an *already-running* session's mandate mid-flight (e.g. an agent calling `aletheia_set_mandate` to loosen its own permissions, which is deliberately blocked). Most users want the startup flags below, not `operatorSecret`.
+
 ### 1. Claude Code CLI
 
-Add Aletheia directly to Claude Code in one command:
-
 ```bash
+# Read-only (safe default — can inspect but not modify anything):
 claude mcp add aletheia -- npx -y aletheia-mcp
+
+# Practical default for a coding agent that needs to edit files in your project:
+claude mcp add aletheia -- npx -y aletheia-mcp --allow-write --allowed-paths /path/to/your/project
 ```
 
 ### 2. Claude Desktop
@@ -119,7 +124,7 @@ Add to your `claude_desktop_config.json`:
   "mcpServers": {
     "aletheia": {
       "command": "npx",
-      "args": ["-y", "aletheia-mcp"]
+      "args": ["-y", "aletheia-mcp", "--allow-write", "--allowed-paths", "/path/to/your/project"]
     }
   }
 }

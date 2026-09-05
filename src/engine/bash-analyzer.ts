@@ -652,7 +652,7 @@ export function analyzeBashCommand(rawCommandInput: string, mandate: Mandate): B
       severity: "HIGH",
       description: "Filesystem write / redirection detected under a read-only mandate",
       evidence: rawCommand.slice(0, 120),
-      remediation: "The active session mandate permits only read operations. Enabling allowWrite requires operator authorization (operatorSecret); agents cannot self-authorize write access.",
+      remediation: "The active session mandate permits only read operations. If this is a fresh install, restart the server with --allow-write (and --allowed-paths) to enable this permanently. To change an already-running session, the operator must supply operatorSecret; agents cannot self-authorize write access.",
     });
   }
 
@@ -663,7 +663,7 @@ export function analyzeBashCommand(rawCommandInput: string, mandate: Mandate): B
       severity: "HIGH",
       description: "Outbound network command detected under a local-only mandate",
       evidence: rawCommand.slice(0, 120),
-      remediation: "The active mandate forbids network egress. Enabling allowNetwork requires operator authorization (operatorSecret); agents cannot self-authorize network access.",
+      remediation: "The active mandate forbids network egress. If this is a fresh install, restart the server with --allow-network to enable this permanently. To change an already-running session, the operator must supply operatorSecret; agents cannot self-authorize network access.",
     });
   }
 

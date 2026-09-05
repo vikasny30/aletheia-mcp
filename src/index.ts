@@ -47,11 +47,19 @@ Usage:
 Options:
   --allow-write            Authorize filesystem writes and mutations (default: read-only)
   --allow-network          Authorize outbound network requests (default: local-only)
+  --allow-loopback         Authorize requests to localhost/127.0.0.1 dev servers (default: blocked)
   --allowed-paths <paths>  Comma-separated allowed directories (default: current working directory)
   --secret <token>         Operator authentication token for runtime mandate changes
   --mandate <file.json>    Load initial mandate parameters from JSON file
   --version, -v            Show version
   --help, -h               Show help
+
+Note: --allow-write / --allow-network / --allow-loopback / --allowed-paths set the
+INITIAL mandate at startup and are not subject to the operator-secret requirement --
+that requirement only applies to changing an already-running session's mandate
+(e.g. via the aletheia_set_mandate tool). Most users who want their agent to be able
+to write files should just add --allow-write (and --allowed-paths) here, not chase
+operatorSecret.
     `);
     process.exit(0);
   }
@@ -60,6 +68,7 @@ Options:
   const initialMandate: Partial<Mandate> = {
     allowWrite: args.includes("--allow-write") || process.env.ALETHEIA_ALLOW_WRITE === "true",
     allowNetwork: args.includes("--allow-network") || process.env.ALETHEIA_ALLOW_NETWORK === "true",
+    allowLoopback: args.includes("--allow-loopback") || process.env.ALETHEIA_ALLOW_LOOPBACK === "true",
   };
 
   const secretIdx = args.indexOf("--secret");

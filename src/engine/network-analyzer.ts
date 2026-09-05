@@ -121,7 +121,7 @@ export function analyzeUrl(candidateUrlInput: unknown, mandate: Mandate): Networ
         severity: "HIGH",
         description: `Blocked attempt to access local loopback service (${hostname}) without loopback authorization`,
         evidence: candidateUrl,
-        remediation: "Requests to local dev services (localhost / 127.0.0.1) require allowLoopback=true in the mandate. Enabling this requires operator authorization (operatorSecret).",
+        remediation: "Requests to local dev services (localhost / 127.0.0.1) require allowLoopback=true in the mandate. If this is a fresh install, restart the server with --allow-loopback to enable this permanently. To change an already-running session, the operator must supply operatorSecret.",
       });
     }
 
@@ -133,7 +133,7 @@ export function analyzeUrl(candidateUrlInput: unknown, mandate: Mandate): Networ
         severity: "HIGH",
         description: "External network request rejected under local-only mandate",
         evidence: candidateUrl,
-        remediation: "The active session mandate permits offline operation only. Enabling allowNetwork requires operator authorization (operatorSecret); agents cannot self-authorize external network access.",
+        remediation: "The active session mandate permits offline operation only. If this is a fresh install, restart the server with --allow-network to enable this permanently. To change an already-running session, the operator must supply operatorSecret; agents cannot self-authorize external network access.",
       });
     }
 

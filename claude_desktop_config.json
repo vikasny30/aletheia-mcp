@@ -2,7 +2,7 @@
   "mcpServers": {
     "aletheia": {
       "command": "npx",
-      "args": ["-y", "aletheia-mcp"],
+      "args": ["-y", "aletheia-mcp", "--allow-write", "--allowed-paths", "/path/to/your/project"],
       "env": {}
     }
   }
