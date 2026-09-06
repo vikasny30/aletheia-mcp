@@ -1,0 +1,52 @@
+# Smithery configuration file: https://smithery.ai/docs/config#smitheryyaml
+
+startCommand:
+  type: stdio
+  configSchema:
+    # JSON Schema defining the configuration options for Aletheia MCP.
+    type: object
+    properties:
+      allowWrite:
+        type: boolean
+        default: false
+        description: >-
+          Authorize filesystem writes and mutations. Off by default
+          (read-only).
+      allowNetwork:
+        type: boolean
+        default: false
+        description: >-
+          Authorize outbound network requests. Off by default
+          (local-only).
+      allowLoopback:
+        type: boolean
+        default: false
+        description: >-
+          Authorize requests to localhost / 127.0.0.1 dev servers.
+          Off by default.
+      allowedPaths:
+        type: string
+        description: >-
+          Comma-separated list of directories that filesystem writes are
+          confined to. Defaults to the current working directory.
+      operatorSecret:
+        type: string
+        description: >-
+          Operator token required to loosen an already-running session's
+          mandate at runtime. Not needed for the startup flags above.
+  commandFunction:
+    # Produces the CLI command to start Aletheia MCP on stdio.
+    |-
+    (config) => {
+      const args = ['-y', 'aletheia-mcp'];
+      if (config.allowWrite) args.push('--allow-write');
+      if (config.allowNetwork) args.push('--allow-network');
+      if (config.allowLoopback) args.push('--allow-loopback');
+      if (config.allowedPaths) args.push('--allowed-paths', config.allowedPaths);
+      const env = {};
+      if (config.operatorSecret) env.ALETHEIA_OPERATOR_SECRET = config.operatorSecret;
+      return { command: 'npx', args, env };
+    }
+  exampleConfig:
+    allowWrite: true
+    allowedPaths: /path/to/your/project
