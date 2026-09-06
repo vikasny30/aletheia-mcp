@@ -9,32 +9,32 @@
 
 ![Aletheia MCP blocking an out-of-scope file write and reporting it in the telemetry audit log](assets/demo.gif)
 
-Aletheia MCP intercepts tool calls from Claude, Claude Code, and autonomous agents *before* they execute and blocks the destructive ones — with **sub-millisecond (~25 µs) overhead** and no LLM in the hot path.
+Aletheia MCP intercepts tool calls from Claude, Claude Code, and autonomous agents *before* they execute and blocks the destructive ones, with **sub-millisecond (~25 µs) overhead** and no LLM in the hot path.
 
-It scores each call against the [Aletheia research paper](https://github.com/vikasny30/aletheia-paper)'s taxonomy of **nine behavioral signatures** — recurring LLM failure patterns, each with an ID, derived from the interfaces through which a model touches its environment (output–reality, input–trust, task–scope, and so on). This server enforces two of them:
+It scores each call against the [Aletheia research paper](https://github.com/vikasny30/aletheia-paper)'s taxonomy of **nine behavioral signatures**: recurring LLM failure patterns, each with an ID, derived from the interfaces through which a model touches its environment (output/reality, input/trust, task/scope, and so on). This server enforces two of them:
 
-- **S3 — Scope Creep Beyond Mandate**: the agent acts outside the task it was actually given — writing files outside its workspace, reaching into unrelated systems, quietly widening what it was asked to do.
-- **S2b — Adversarial Prompt Injection**: instructions smuggled in through tool results, file contents, or fetched data that try to hijack what the agent does next.
+- **S3 (Scope Creep Beyond Mandate)**: the agent acts outside the task it was actually given, writing files outside its workspace, reaching into unrelated systems, quietly widening what it was asked to do.
+- **S2b (Adversarial Prompt Injection)**: instructions smuggled in through tool results, file contents, or fetched data that try to hijack what the agent does next.
 
-The paper validates those nine signatures against **2,571 entries** across three independent corpora — the AI Incident Database (AIID + hand-curated supplement, n=1,134), the AVID AI Vulnerability Database (n=767), and the MIT AI Risk Repository (n=670). The per-model detection-rate figures from that research are reported in the paper with their methodology; treat them as directional context for *why* these signatures matter, not as an independently-audited benchmark of this codebase.
+The paper validates those nine signatures against **2,571 entries** across three independent corpora: the AI Incident Database (AIID + hand-curated supplement, n=1,134), the AVID AI Vulnerability Database (n=767), and the MIT AI Risk Repository (n=670). The per-model detection-rate figures from that research are reported in the paper with their methodology; treat them as directional context for *why* these signatures matter, not as an independently-audited benchmark of this codebase.
 
 ---
 
 ## Security Model: A Fast Pre-Filter, Not a Sandbox
 
-Aletheia MCP is a **deterministic, pattern-based lexical and structural filter**, iteratively hardened through many rounds of adversarial red-teaming against the shell, SQL, filesystem, and network surfaces it inspects. Each round of testing has turned up real gaps, and each has been fixed and re-verified — that process is ongoing, not finished, and it never fully finishes: this is honest heuristic pattern-matching over Bash and SQL, not a formal parser or a proof of completeness.
+Aletheia MCP is a **deterministic, pattern-based lexical and structural filter**, iteratively hardened through many rounds of adversarial red-teaming against the shell, SQL, filesystem, and network surfaces it inspects. Each round of testing has turned up real gaps, and each has been fixed and re-verified. That process is ongoing, not finished, and it never fully finishes: this is honest heuristic pattern-matching over Bash and SQL, not a formal parser or a proof of completeness.
 
 > [!IMPORTANT]
 > **What this is, and isn't:**
-> - Aletheia is a **fast, first-line pre-execution filter** — single-digit-to-low-tens-of-microseconds overhead, deterministic, no LLM in the hot path. It catches a wide and continually growing set of known destructive, exfiltration, SSRF, and privilege-escalation patterns before they execute.
-> - Aletheia is **not a sandbox, not a formal guarantee, and not a substitute** for least-privilege credentials, non-root system users, scoped database grants, or containerized/VM-level isolation (Docker, gVisor, Firecracker). Because it works by recognizing known-dangerous *patterns* in shell and SQL text rather than by parsing and fully understanding either language, a sufficiently novel or obfuscated construct can, in principle, always be found that the current pattern set doesn't yet cover — this is an inherent property of pattern-based filtering against a Turing-complete shell, not a bug that a future patch will finally close for good.
-> - Aletheia does **not** perform DNS resolution, so a domain name an attacker controls and points at a private IP or cloud metadata endpoint is outside what a string-based filter can ever detect at this layer — that requires DNS-aware egress control (see [SECURITY.md](SECURITY.md)).
-> - The right way to run this: treat Aletheia as one layer that removes the easy, common failure modes cheaply, **combined with** OS/network-level sandboxing as the actual security boundary — not instead of it.
+> - Aletheia is a **fast, first-line pre-execution filter**: single-digit-to-low-tens-of-microseconds overhead, deterministic, no LLM in the hot path. It catches a wide and continually growing set of known destructive, exfiltration, SSRF, and privilege-escalation patterns before they execute.
+> - Aletheia is **not a sandbox, not a formal guarantee, and not a substitute** for least-privilege credentials, non-root system users, scoped database grants, or containerized/VM-level isolation (Docker, gVisor, Firecracker). Because it works by recognizing known-dangerous *patterns* in shell and SQL text rather than by parsing and fully understanding either language, a sufficiently novel or obfuscated construct can, in principle, always be found that the current pattern set doesn't yet cover. This is an inherent property of pattern-based filtering against a Turing-complete shell, not a bug that a future patch will finally close for good.
+> - Aletheia does **not** perform DNS resolution, so a domain name an attacker controls and points at a private IP or cloud metadata endpoint is outside what a string-based filter can ever detect at this layer; that requires DNS-aware egress control (see [SECURITY.md](SECURITY.md)).
+> - The right way to run this: treat Aletheia as one layer that removes the easy, common failure modes cheaply, **combined with** OS/network-level sandboxing as the actual security boundary, not instead of it.
 
 ### Known Limitations (non-exhaustive, updated as found)
 
 - Detection is enumerated over known dangerous functions, flags, and syntax shapes (e.g., specific SQL functions, specific shell obfuscation idioms). Sibling or novel variants not yet added to the pattern set will not be caught until they are found and added.
-- No DNS resolution — SSRF protection is limited to literal IPs/hostnames in the request text, not what a domain name actually resolves to.
+- No DNS resolution: SSRF protection is limited to literal IPs/hostnames in the request text, not what a domain name actually resolves to.
 - S2b (prompt-injection) detection is keyword- and pattern-based; it is not a semantic classifier and can be evaded by sufficiently novel phrasing.
 - This is a single, actively-iterated implementation; it has not yet had independent, adversarial third-party review beyond the iterative self-testing documented in this repository's commit history.
 
@@ -57,7 +57,7 @@ Existing defenses rely on LLM-as-a-judge evaluators that add **1,500–3,000 ms*
 
 ## Key Features
 
-The list below reflects what the pattern set currently catches, built up through iterative adversarial testing rather than designed upfront as a complete taxonomy — see [Known Limitations](#known-limitations-non-exhaustive-updated-as-found) above for what it does not (yet, or ever, in the DNS case) cover.
+The list below reflects what the pattern set currently catches, built up through iterative adversarial testing rather than designed upfront as a complete taxonomy. See [Known Limitations](#known-limitations-non-exhaustive-updated-as-found) above for what it does not (yet, or ever, in the DNS case) cover.
 
 - **⚡ Sub-Millisecond (~25 µs p99) Overhead**: 100,000+ evaluations per second. Zero perceived latency in agent loops.
 - **🛡️ Monotonic Mandate Escalation Guard**: Prevents autonomous agents from self-granting write, destructive, or network permissions. Mandates can be tightened voluntarily, but loosening requires an `operatorSecret`.
@@ -93,7 +93,7 @@ The list below reflects what the pattern set currently catches, built up through
 
 ## Performance Benchmarks
 
-Measured on 10,000 consecutive multi-domain evaluations (Bash de-obfuscation, SQL pattern validation, path verification, SSRF check, prompt injection). Numbers below are from a representative local run; p50 is stable across runs, p99 varies with system load (observed range ~24–70 µs) since it's sensitive to GC pauses at microsecond scale — both are still comfortably within the sub-millisecond target:
+Measured on 10,000 consecutive multi-domain evaluations (Bash de-obfuscation, SQL pattern validation, path verification, SSRF check, prompt injection). Numbers below are from a representative local run; p50 is stable across runs, p99 varies with system load (observed range ~24–70 µs) since it's sensitive to GC pauses at microsecond scale; both are still comfortably within the sub-millisecond target:
 
 | Metric | Measured Value | Target |
 | :--- | :--- | :--- |
@@ -103,19 +103,19 @@ Measured on 10,000 consecutive multi-domain evaluations (Bash de-obfuscation, SQ
 | **Throughput** | **100,000+ evals / second** | > 10,000 / s |
 | **Hot-Path External APIs**| **0 (Deterministic local engine)** | 0 |
 
-*Run locally via `npm run benchmark`* — results will vary by machine; treat the specific microsecond figures as illustrative of "comfortably sub-millisecond," not as a precise SLA.
+*Run locally via `npm run benchmark`.* Results will vary by machine; treat the specific microsecond figures as illustrative of "comfortably sub-millisecond," not as a precise SLA.
 
 ---
 
 ## Quickstart
 
 > [!TIP]
-> **By default, Aletheia starts fully locked down (read-only, no network, no loopback) and stays that way — on purpose.** If your agent needs to write files or make network calls, grant that up front with `--allow-write` / `--allow-network` / `--allow-loopback` (and scope writes to a directory with `--allowed-paths`), as shown below. These flags set the **initial** mandate at server startup and are not gated by `operatorSecret` — that gate only applies to changing an *already-running* session's mandate mid-flight (e.g. an agent calling `aletheia_set_mandate` to loosen its own permissions, which is deliberately blocked). Most users want the startup flags below, not `operatorSecret`.
+> **By default, Aletheia starts fully locked down (read-only, no network, no loopback) and stays that way, on purpose.** If your agent needs to write files or make network calls, grant that up front with `--allow-write` / `--allow-network` / `--allow-loopback` (and scope writes to a directory with `--allowed-paths`), as shown below. These flags set the **initial** mandate at server startup and are not gated by `operatorSecret`; that gate only applies to changing an *already-running* session's mandate mid-flight (e.g. an agent calling `aletheia_set_mandate` to loosen its own permissions, which is deliberately blocked). Most users want the startup flags below, not `operatorSecret`.
 
 ### 1. Claude Code CLI
 
 ```bash
-# Read-only (safe default — can inspect but not modify anything):
+# Read-only (safe default; can inspect but not modify anything):
 claude mcp add aletheia -- npx -y aletheia-mcp
 
 # Practical default for a coding agent that needs to edit files in your project:
