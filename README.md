@@ -7,6 +7,8 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/Tests-155%20passed-success.svg)](test/s3-scope.test.ts)
 
+![Aletheia MCP blocking an out-of-scope file write and reporting it in the telemetry audit log](assets/demo.gif)
+
 Aletheia MCP intercepts tool calls from Claude, Claude Code, and autonomous agents before execution, scores them against **Signature S3 (Scope Creep Beyond Mandate)** and **Signature S2b (Adversarial Prompt Injection)**, and blocks destructive actions with **sub-millisecond (~25 µs) overhead**.
 
 Derived from the [Aletheia Behavioral Observability Framework](https://github.com/vikasny30/aletheia). The framework references **2,571 real-world AI failure incidents** cataloged across AIID, AVID, and the MIT AI Risk Repository as its motivating corpus; the specific per-model failure-rate figures cited from that research have not been published in this repository with a reproducible methodology, and should be treated as the author's internal research pending that publication, not as an independently-audited benchmark.
