@@ -11,7 +11,7 @@
 
 Aletheia MCP intercepts tool calls from Claude, Claude Code, and autonomous agents before execution, scores them against **Signature S3 (Scope Creep Beyond Mandate)** and **Signature S2b (Adversarial Prompt Injection)**, and blocks destructive actions with **sub-millisecond (~25 µs) overhead**.
 
-Derived from the [Aletheia Behavioral Observability Framework](https://github.com/vikasny30/aletheia). The framework references **2,571 real-world AI failure incidents** cataloged across AIID, AVID, and the MIT AI Risk Repository as its motivating corpus; the specific per-model failure-rate figures cited from that research have not been published in this repository with a reproducible methodology, and should be treated as the author's internal research pending that publication, not as an independently-audited benchmark.
+Derived from the [Aletheia research paper](https://github.com/vikasny30/aletheia-paper) — *A Taxonomy and Empirical Evaluation of Behavioral Failure Patterns in Large Language Models*. The paper references **2,571 real-world AI failure incidents** cataloged across AIID, AVID, and the MIT AI Risk Repository as its motivating corpus; the specific per-model failure-rate figures cited from that research have not been published in this repository with a reproducible methodology, and should be treated as the author's internal research pending that publication, not as an independently-audited benchmark.
 
 ---
 
@@ -236,5 +236,5 @@ Aletheia MCP is developed by **Vikas Shivpuriya** as part of the broader **Aleth
 
 What *is* independently verifiable in this repository: the test suite (`npm test`), the latency benchmark (`npm run benchmark`), and the commit history documenting each round of adversarial testing and the fixes it produced.
 
-- **Research Core & Evaluation Harness**: [github.com/vikasny30/aletheia](https://github.com/vikasny30/aletheia)
+- **Research Paper & Taxonomy**: [github.com/vikasny30/aletheia-paper](https://github.com/vikasny30/aletheia-paper)
 - **License**: [Apache 2.0](LICENSE)
