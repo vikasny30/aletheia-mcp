@@ -1,6 +1,6 @@
 # Aletheia MCP Server 🛡️
 
-> **Sub-millisecond runtime safety & scope creep (Signature S3) filter for AI agent tool calls.**
+> **Sub-millisecond runtime filter that blocks scope-creep and prompt-injection tool calls before an AI agent can run them.**
 
 [![MCP Compliant](https://img.shields.io/badge/MCP-Protocol%20Compliant-blue.svg)](https://modelcontextprotocol.io)
 [![Latency](https://img.shields.io/badge/p99%20Latency-~25%C2%A0%C2%B5s-brightgreen.svg)](#performance-benchmarks)
@@ -9,9 +9,14 @@
 
 ![Aletheia MCP blocking an out-of-scope file write and reporting it in the telemetry audit log](assets/demo.gif)
 
-Aletheia MCP intercepts tool calls from Claude, Claude Code, and autonomous agents before execution, scores them against **Signature S3 (Scope Creep Beyond Mandate)** and **Signature S2b (Adversarial Prompt Injection)**, and blocks destructive actions with **sub-millisecond (~25 µs) overhead**.
+Aletheia MCP intercepts tool calls from Claude, Claude Code, and autonomous agents *before* they execute and blocks the destructive ones — with **sub-millisecond (~25 µs) overhead** and no LLM in the hot path.
 
-Derived from the [Aletheia research paper](https://github.com/vikasny30/aletheia-paper) — *A Taxonomy and Empirical Evaluation of Behavioral Failure Patterns in Large Language Models*. The paper references **2,571 real-world AI failure incidents** cataloged across AIID, AVID, and the MIT AI Risk Repository as its motivating corpus; the specific per-model failure-rate figures cited from that research have not been published in this repository with a reproducible methodology, and should be treated as the author's internal research pending that publication, not as an independently-audited benchmark.
+It scores each call against the [Aletheia research paper](https://github.com/vikasny30/aletheia-paper)'s taxonomy of LLM **behavioral failure patterns** — the paper calls them *signatures*, each with an ID. This server enforces two of them:
+
+- **S3 — Scope Creep Beyond Mandate**: the agent acts outside the task it was actually given — writing files outside its workspace, reaching into unrelated systems, quietly widening what it was asked to do.
+- **S2b — Adversarial Prompt Injection**: instructions smuggled in through tool results, file contents, or fetched data that try to hijack what the agent does next.
+
+The paper's taxonomy is motivated by **2,571 real-world AI failure incidents** cataloged across AIID, AVID, and the MIT AI Risk Repository. The specific per-model failure-rate figures cited from that research have not been published in this repository with a reproducible methodology, and should be treated as the author's internal research pending that publication, not as an independently-audited benchmark.
 
 ---
 
