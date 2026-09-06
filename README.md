@@ -9,7 +9,7 @@
 
 ![Aletheia MCP blocking an out-of-scope file write and reporting it in the telemetry audit log](assets/demo.gif)
 
-Aletheia MCP intercepts tool calls from Claude, Claude Code, and autonomous agents *before* they execute and blocks the destructive ones, with **sub-millisecond (~25 µs) overhead** and no LLM in the hot path.
+Aletheia MCP intercepts tool calls from Claude Code, Claude Desktop, and any other MCP-compatible agent *before* they execute and blocks the destructive ones, with **sub-millisecond (~25 µs) overhead** and no LLM in the hot path.
 
 It scores each call against the [Aletheia research paper](https://github.com/vikasny30/aletheia-paper)'s taxonomy of **nine behavioral signatures**: recurring LLM failure patterns, each with an ID, derived from the interfaces through which a model touches its environment (output/reality, input/trust, task/scope, and so on). This server enforces two of them:
 
