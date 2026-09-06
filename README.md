@@ -237,7 +237,7 @@ Clients can inspect server state on-demand via standard MCP `resources/read`:
 
 ## Research Attribution & Empirical Corpus
 
-Aletheia MCP is developed by **Vikas Shivpuriya** as part of the broader **Aletheia AI Safety Research Core**. The underlying behavioral failure signatures are motivated by incidents cataloged in the AI Incident Database (AIID), AVID, and the MIT AI Risk Repository. The per-model detection rates referenced for frontier systems (Claude Sonnet 4.6, GPT-4o, Gemini 2.5 Flash) come from that paper's evaluation harness; treat them as directional context for *why* Signature S3 matters rather than as a verifiable benchmark of this codebase.
+Aletheia MCP is developed by **Vikas Shivpuriya** as part of the broader **Aletheia AI Safety Research Core**. The underlying behavioral failure signatures are motivated by incidents cataloged in the AI Incident Database (AIID), the AVID AI Vulnerability Database, and the MIT AI Risk Repository. The per-model detection rates referenced for frontier systems (Claude Sonnet 4.6, GPT-4o, Gemini 2.5 Flash) come from that paper's evaluation harness; treat them as directional context for *why* Signature S3 matters rather than as a verifiable benchmark of this codebase.
 
 What *is* independently verifiable in this repository: the test suite (`npm test`), the latency benchmark (`npm run benchmark`), and the commit history documenting each round of adversarial testing and the fixes it produced.
 
