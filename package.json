@@ -5,7 +5,7 @@
   "mcpName": "io.github.vikasny30/aletheia-mcp",
   "type": "module",
   "bin": {
-    "aletheia-mcp": "./dist/index.js"
+    "aletheia-mcp": "dist/index.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -44,7 +44,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/vikasny30/aletheia-mcp.git"
+    "url": "git+https://github.com/vikasny30/aletheia-mcp.git"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.6.0",
