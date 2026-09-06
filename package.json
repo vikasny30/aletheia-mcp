@@ -1,7 +1,8 @@
 {
   "name": "aletheia-mcp",
-  "version": "0.2.0",
-  "description": "Model Context Protocol (MCP) server for Aletheia: Sub-millisecond runtime safety & scope creep (S3) filter for AI agent tool calls.",
+  "version": "0.3.0",
+  "description": "Fast deterministic MCP pre-filter that blocks known scope-creep (S3) and prompt-injection (S2b) tool-call patterns before an agent runs them. ~25 microsecond overhead, no LLM in the hot path; a first-line pre-filter, not a sandbox.",
+  "mcpName": "io.github.vikasny30/aletheia-mcp",
   "type": "module",
   "bin": {
     "aletheia-mcp": "./dist/index.js"
@@ -12,7 +13,10 @@
     "dist",
     "README.md",
     "SECURITY.md",
-    "LICENSE"
+    "CHANGELOG.md",
+    "LICENSE",
+    "server.json",
+    "mcp.json"
   ],
   "scripts": {
     "build": "tsc",

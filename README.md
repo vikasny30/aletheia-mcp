@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/Tests-155%20passed-success.svg)](test/s3-scope.test.ts)
 
-![Aletheia MCP blocking an out-of-scope file write and reporting it in the telemetry audit log](assets/demo.gif)
+![Aletheia MCP blocking an out-of-scope file write and reporting it in the telemetry audit log](https://raw.githubusercontent.com/vikasny30/aletheia-mcp/main/assets/demo.gif)
 
 Aletheia MCP intercepts tool calls from Claude Code, Claude Desktop, and any other MCP-compatible agent *before* they execute and blocks the destructive ones, with **sub-millisecond (~25 µs) overhead** and no LLM in the hot path.
 

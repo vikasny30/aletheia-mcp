@@ -1,0 +1,76 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.vikasny30/aletheia-mcp",
+  "title": "Aletheia Runtime Safety & Scope Creep Filter",
+  "description": "Fast deterministic pre-execution filter for AI agent tool calls. Pattern-matches known scope-creep (S3) and prompt-injection (S2b) vectors and blocks them in ~25 microseconds with no LLM in the hot path. A first-line pre-filter, not a sandbox.",
+  "repository": {
+    "url": "https://github.com/vikasny30/aletheia-mcp",
+    "source": "github"
+  },
+  "version": "0.3.0",
+  "websiteUrl": "https://github.com/vikasny30/aletheia-mcp",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "aletheia-mcp",
+      "version": "0.3.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "named",
+          "name": "--allow-write",
+          "description": "Authorize filesystem writes and mutations (default: read-only).",
+          "isRequired": false
+        },
+        {
+          "type": "named",
+          "name": "--allow-network",
+          "description": "Authorize outbound network requests (default: local-only).",
+          "isRequired": false
+        },
+        {
+          "type": "named",
+          "name": "--allow-loopback",
+          "description": "Authorize requests to localhost / 127.0.0.1 dev servers (default: blocked).",
+          "isRequired": false
+        },
+        {
+          "type": "named",
+          "name": "--allowed-paths",
+          "description": "Comma-separated list of directories writes are confined to (default: current working directory).",
+          "format": "filepath",
+          "isRequired": false
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "ALETHEIA_ALLOW_WRITE",
+          "description": "Set to \"true\" to authorize filesystem writes (equivalent to --allow-write).",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "ALETHEIA_ALLOW_NETWORK",
+          "description": "Set to \"true\" to authorize outbound network requests (equivalent to --allow-network).",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "ALETHEIA_ALLOW_LOOPBACK",
+          "description": "Set to \"true\" to authorize requests to localhost / 127.0.0.1 (equivalent to --allow-loopback).",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "ALETHEIA_OPERATOR_SECRET",
+          "description": "Operator token required to loosen an already-running session's mandate at runtime.",
+          "isRequired": false,
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}

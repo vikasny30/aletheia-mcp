@@ -25,7 +25,7 @@ import { registerResources } from "./resources/index.js";
 import { registerPrompts } from "./prompts/index.js";
 import { McpProxyGateway } from "./proxy/mcp-proxy.js";
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -55,7 +55,7 @@ Options:
   --help, -h               Show help
 
 Note: --allow-write / --allow-network / --allow-loopback / --allowed-paths set the
-INITIAL mandate at startup and are not subject to the operator-secret requirement --
+INITIAL mandate at startup and are not subject to the operator-secret requirement;
 that requirement only applies to changing an already-running session's mandate
 (e.g. via the aletheia_set_mandate tool). Most users who want their agent to be able
 to write files should just add --allow-write (and --allowed-paths) here, not chase
@@ -159,7 +159,7 @@ operatorSecret.
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  console.error(`[Aletheia MCP] Server running on stdio (v${VERSION}) — S3 Scope Creep filter active`);
+  console.error(`[Aletheia MCP] Server running on stdio (v${VERSION}); S3 Scope Creep filter active`);
 }
 
 main().catch((error) => {
