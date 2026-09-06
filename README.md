@@ -11,12 +11,12 @@
 
 Aletheia MCP intercepts tool calls from Claude, Claude Code, and autonomous agents *before* they execute and blocks the destructive ones — with **sub-millisecond (~25 µs) overhead** and no LLM in the hot path.
 
-It scores each call against the [Aletheia research paper](https://github.com/vikasny30/aletheia-paper)'s taxonomy of LLM **behavioral failure patterns** — the paper calls them *signatures*, each with an ID. This server enforces two of them:
+It scores each call against the [Aletheia research paper](https://github.com/vikasny30/aletheia-paper)'s taxonomy of **nine behavioral signatures** — recurring LLM failure patterns, each with an ID, derived from the interfaces through which a model touches its environment (output–reality, input–trust, task–scope, and so on). This server enforces two of them:
 
 - **S3 — Scope Creep Beyond Mandate**: the agent acts outside the task it was actually given — writing files outside its workspace, reaching into unrelated systems, quietly widening what it was asked to do.
 - **S2b — Adversarial Prompt Injection**: instructions smuggled in through tool results, file contents, or fetched data that try to hijack what the agent does next.
 
-The paper's taxonomy is motivated by **2,571 real-world AI failure incidents** cataloged across AIID, AVID, and the MIT AI Risk Repository. The specific per-model failure-rate figures cited from that research have not been published in this repository with a reproducible methodology, and should be treated as the author's internal research pending that publication, not as an independently-audited benchmark.
+The paper validates those nine signatures against **2,571 entries** across three independent corpora — the AI Incident Database (AIID + hand-curated supplement, n=1,134), the AVID AI Vulnerability Database (n=767), and the MIT AI Risk Repository (n=670). The per-model detection-rate figures from that research are reported in the paper with their methodology; treat them as directional context for *why* these signatures matter, not as an independently-audited benchmark of this codebase.
 
 ---
 
@@ -237,7 +237,7 @@ Clients can inspect server state on-demand via standard MCP `resources/read`:
 
 ## Research Attribution & Empirical Corpus
 
-Aletheia MCP is developed by **Vikas Shivpuriya** as part of the broader **Aletheia AI Safety Research Core**. The underlying behavioral failure signatures are motivated by incidents cataloged in the AI Incident Database (AIID), AVID, and the MIT AI Risk Repository. The specific evaluation-harness numbers referenced for frontier models (Claude 3.5/4.6, GPT-4o, Gemini 2.5) are internal research from that broader project; the harness and raw data are not yet published alongside this repository, so treat those figures as directional context for *why* Signature S3 matters rather than as a verifiable benchmark of this codebase.
+Aletheia MCP is developed by **Vikas Shivpuriya** as part of the broader **Aletheia AI Safety Research Core**. The underlying behavioral failure signatures are motivated by incidents cataloged in the AI Incident Database (AIID), AVID, and the MIT AI Risk Repository. The per-model detection rates referenced for frontier systems (Claude Sonnet 4.6, GPT-4o, Gemini 2.5 Flash) come from that paper's evaluation harness; treat them as directional context for *why* Signature S3 matters rather than as a verifiable benchmark of this codebase.
 
 What *is* independently verifiable in this repository: the test suite (`npm test`), the latency benchmark (`npm run benchmark`), and the commit history documenting each round of adversarial testing and the fixes it produced.
 
