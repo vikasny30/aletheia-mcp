@@ -20,6 +20,8 @@
     "dev": "tsx src/index.ts",
     "test": "tsx test/s3-scope.test.ts",
     "benchmark": "tsx test/latency-benchmark.ts",
+    "test:scale:concurrent": "npm run build && node test/scale-concurrent-customers.mjs",
+    "test:scale:isolation": "npm run build && node test/scale-cross-customer-isolation.mjs",
     "prepare": "npm run build"
   },
   "keywords": [
@@ -45,6 +47,7 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@modelcontextprotocol/server-filesystem": "^2026.8.31",
     "@types/node": "^22.13.5",
     "tsx": "^4.19.3",
     "typescript": "^5.7.3"
