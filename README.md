@@ -11,10 +11,10 @@
 
 Aletheia MCP intercepts tool calls from Claude Code, Claude Desktop, and any other MCP-compatible agent *before* they execute and blocks the destructive ones, with **sub-millisecond (~25 µs) overhead** and no LLM in the hot path.
 
-It scores each call against the [Aletheia research paper](https://github.com/vikasny30/aletheia-paper)'s taxonomy of **nine behavioral signatures**: recurring LLM failure patterns, each with an ID, derived from the interfaces through which a model touches its environment (output/reality, input/trust, task/scope, and so on). This server enforces two of them:
+It's motivated by the [Aletheia research paper](https://github.com/vikasny30/aletheia-paper)'s taxonomy of **nine behavioral signatures**: recurring LLM failure patterns, each with an ID, derived from the interfaces through which a model touches its environment (output/reality, input/trust, task/scope, and so on). This server targets two of them:
 
 - **S3 (Scope Creep Beyond Mandate)**: the agent acts outside the task it was actually given, writing files outside its workspace, reaching into unrelated systems, quietly widening what it was asked to do.
-- **S2b (Adversarial Prompt Injection)**: instructions smuggled in through tool results, file contents, or fetched data that try to hijack what the agent does next.
+- **S2b (Jailbreak Vulnerability, per the paper's naming)**: this server ships a practical, pattern-based heuristic for the adjacent problem of adversarial instructions smuggled through tool results, file contents, or fetched data. **This is an engineering heuristic inspired by S2b, not an implementation of the paper's own empirical S2b findings** — the paper explicitly defers S2b's evaluation ("scoped as a defined next step") pending a more stable attack taxonomy, and this server's keyword/pattern matching is a different, narrower thing than what that evaluation would measure.
 
 The paper validates those nine signatures against **2,571 entries** across three independent corpora: the AI Incident Database (AIID + hand-curated supplement, n=1,134), the AVID AI Vulnerability Database (n=767), and the MIT AI Risk Repository (n=670). The per-model detection-rate figures from that research are reported in the paper with their methodology; treat them as directional context for *why* these signatures matter, not as an independently-audited benchmark of this codebase.
 
@@ -104,6 +104,35 @@ Measured on 10,000 consecutive multi-domain evaluations (Bash de-obfuscation, SQ
 | **Hot-Path External APIs**| **0 (Deterministic local engine)** | 0 |
 
 *Run locally via `npm run benchmark`.* Results will vary by machine; treat the specific microsecond figures as illustrative of "comfortably sub-millisecond," not as a precise SLA.
+
+### How the microsecond-level overhead is actually achieved
+
+There's no single trick — it's the absence of the things that would make this slow, plus a few deliberate implementation choices:
+
+1. **No LLM anywhere in the hot path.** The decision is made entirely by synchronous, in-process JavaScript — no network round-trip, no model inference. This is the single biggest factor: an LLM-as-judge call costs 1.5–3 *seconds* because it's a remote inference request; this costs microseconds because it's local string matching.
+2. **Regex patterns are precompiled once at module load**, not rebuilt per call. Every pattern list (`DESTRUCTIVE_SIGNATURES`, `SENSITIVE_PATH_PATTERNS`, `OBFUSCATION_PATTERNS`, etc.) is a `RegExp` object constructed at server startup and reused for the life of the process — V8 compiles a regex's internal representation once, so there's no recompilation cost per request.
+3. **Inputs are short, and the operations on them are linear.** A shell command, SQL query, path, or URL is typically tens to a few hundred characters; a dozen sequential regex passes over a string that size is inherently a few-microsecond operation. (The one time this assumption broke — an O(n²) normalization step that was fine on typical input but took 18 seconds on a 100KB adversarial payload — is exactly the kind of thing documented and fixed in the commit history; see [Known Limitations](#known-limitations-non-exhaustive-updated-as-found).)
+4. **Dispatch does bounded work, not exhaustive work.** The evaluator first identifies which domain a tool call belongs to (bash, SQL, filesystem, network) via a cheap substring check on the tool name, then runs only that domain's checks — not every check across every domain on every call.
+5. **Fixed-size bookkeeping.** The audit log and latency-history buffers are capped (500 and 2,000 entries respectively) via O(1)-amortized operations, so per-call overhead doesn't grow as the server stays up. This was verified directly, not assumed: 3 million sequential evaluations held a flat ~154,000 ops/sec with no degradation trend.
+
+**The honest caveat if the exact number gets pushed on:** the ~25µs figure is the cost of the in-process evaluation function itself, measured with a high-resolution monotonic clock directly around that call. It does not include JSON-RPC serialization or stdio pipe I/O in a real MCP session, which adds some overhead on top. The claim that holds up is "no LLM in the hot path, comfortably sub-millisecond end to end" — not "exactly 25 microseconds no matter what's measuring it."
+
+---
+
+## Production Readiness & Scale Testing
+
+Beyond the unit test suite, these are real, reproducible tests against actual spawned processes and a real downstream MCP server (`@modelcontextprotocol/server-filesystem`), not synthetic in-process loops. Run them yourself via `npm run test:scale:concurrent` and `npm run test:scale:isolation` (source: `test/scale-*.mjs`).
+
+| Test | What it checks | Result |
+| :--- | :--- | :--- |
+| **Sustained load** (3M evaluations, single instance) | Memory growth / throughput degradation over an extended run, with periodic mandate changes and telemetry reads mixed in | Heap flat at ~8.3MB after an initial ~500K-eval warmup; **~154,000 evals/sec sustained with zero degradation trend** across the full run |
+| **Concurrent multi-instance** (30 simulated customers, real spawned processes) | Correctness and isolation when many independent Aletheia+downstream-server pairs run at once | **4,800 total operations, 0 timeouts, 0 correctness failures** — every one of 1,200 concurrent adversarial path-traversal attempts was blocked, every benign write/read-back matched correctly with no cross-contamination |
+| **Cross-customer isolation** (targeted) | Whether Aletheia's own `--allowed-paths` boundary — not the wrapped server's — actually prevents one instance from reading another's data | Customer A blocked from reading Customer B's ordinary (non-"sensitive") file, even though the downstream server was deliberately given access to both directories; **zero content leakage** |
+| **Realistic false-positive sweep** (114 commands: git, npm/yarn/pnpm, python/pip/poetry, docker/kubectl, make/cargo/maven/gradle, file ops, curl to real APIs, common SQL) | Whether ordinary developer workflows get incorrectly blocked | **0 false positives (0.00%)** under the recommended `--allow-write --allow-network` config |
+| **Downstream crash handling** | Behavior when the wrapped server crashes unexpectedly mid-session | Detected in ~4ms, exit code propagated correctly, clean shutdown with no hang or orphaned process (Aletheia does not auto-restart a crashed downstream — it exits alongside it, same as any stdio MCP server pair) |
+| **Node version floor** | Whether the `engines: >=18.0.0` claim is real | Full test suite (155/155) and a real proxy session against `server-filesystem` both verified passing on Node 18.20.8, not just the development machine's newer version |
+
+None of this substitutes for real, unpredictable usage over time — it rules out the specific failure modes (wrong Node version, memory leak, high false-positive rate, cross-instance interference) that would make early real usage go badly, rather than proving the tool is bug-free.
 
 ---
 
@@ -237,7 +266,7 @@ Clients can inspect server state on-demand via standard MCP `resources/read`:
 
 ## Research Attribution & Empirical Corpus
 
-Aletheia MCP is developed by **Vikas Shivpuriya** as part of the broader **Aletheia AI Safety Research Core**. The underlying behavioral failure signatures are motivated by incidents cataloged in the AI Incident Database (AIID), the AVID AI Vulnerability Database, and the MIT AI Risk Repository. The per-model detection rates referenced for frontier systems (Claude Sonnet 4.6, GPT-4o, Gemini 2.5 Flash) come from that paper's evaluation harness; treat them as directional context for *why* Signature S3 matters rather than as a verifiable benchmark of this codebase.
+Aletheia MCP is developed by **Vikas Shivpuriya** as part of the broader **Aletheia AI Safety Research Core**. The underlying behavioral failure signatures are motivated by incidents cataloged in the AI Incident Database (AIID), the AVID AI Vulnerability Database, and the MIT AI Risk Repository. The per-model detection rates referenced for frontier systems (Claude Sonnet 4.6, GPT-4o, Gemini 2.5 Flash) come from that paper's evaluation harness; treat them as directional context for *why* Signature S3 matters rather than as a verifiable benchmark of this codebase. **Signature S2b specifically is not yet part of that empirical evaluation** — the paper defers it as future work, so this server's S2b filter should be read as an independent, practical heuristic motivated by the taxonomy, not as an implementation validated by the paper's own findings.
 
 What *is* independently verifiable in this repository: the test suite (`npm test`), the latency benchmark (`npm run benchmark`), and the commit history documenting each round of adversarial testing and the fixes it produced.
 
