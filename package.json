@@ -1,6 +1,6 @@
 {
   "name": "aletheia-mcp",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Fast deterministic MCP pre-filter that blocks known scope-creep (S3) and prompt-injection (S2b) tool-call patterns before an agent runs them. ~25 microsecond overhead, no LLM in the hot path; a first-line pre-filter, not a sandbox.",
   "mcpName": "io.github.vikasny30/aletheia-mcp",
   "type": "module",

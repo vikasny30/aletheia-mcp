@@ -25,7 +25,7 @@ import { registerResources } from "./resources/index.js";
 import { registerPrompts } from "./prompts/index.js";
 import { McpProxyGateway } from "./proxy/mcp-proxy.js";
 
-const VERSION = "0.3.0";
+const VERSION = "0.3.1";
 
 async function main() {
   const args = process.argv.slice(2);
