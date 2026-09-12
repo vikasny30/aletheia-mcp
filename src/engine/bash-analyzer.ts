@@ -163,6 +163,17 @@ const OBFUSCATION_PATTERNS: Array<{
     pattern: /\$'\\[0-9xX]/,
     description: "Hex or octal character escape obfuscation in shell string",
   },
+  {
+    // curl/wget staging a payload to disk (-o/-O/--output-document), then executing it via an interpreter
+    // in the same chained command. Evades the direct pipe-to-shell pattern above.
+    pattern: /\b(?:curl|wget|fetch)\b.*?(?:-o\b|--output\b|-O\b|--remote-name\b|--output-document\b)\s+(\S+).*(?:;|&&|\|\|)\s*(?:sudo\s+)?((?:ba|z|da)?sh|python[23]?|perl|ruby|node|pypy[23]?)\s+\1\b/i,
+    description: "Remote payload downloaded to disk then executed via an interpreter (download-then-exec bypass of pipe-to-shell filter)",
+  },
+  {
+    // Same staging pattern, but the downloaded path is invoked directly (optionally after chmod +x)
+    pattern: /\b(?:curl|wget|fetch)\b.*?(?:-o\b|--output\b|-O\b|--remote-name\b|--output-document\b)\s+(\S+).*(?:;|&&|\|\|)\s*\1\b/i,
+    description: "Remote payload downloaded to disk then directly executed (download-then-exec bypass of pipe-to-shell filter)",
+  },
 ];
 
 // Interpreter escape hatch patterns: python -c "...", node -e "...", etc.
@@ -255,6 +266,9 @@ const EXFILTRATION_PATTERNS: Array<{
 const MUTATION_PATTERNS = [
   /(>>?|\|tee\s)/,
   /\b(sed\s+-[a-z]*i|truncate\s+|mv\s+|cp\s+|rm\s+|mkdir\s+|touch\s+)/i,
+  // curl -o/-O/--output/--remote-name and wget -O/--output-document write the response body to disk
+  /\bcurl\b[^;&|`\n]*(-o\b|--output\b|-O\b|--remote-name\b)/i,
+  /\bwget\b[^;&|`\n]*(-O\b|--output-document\b)/i,
 ];
 
 // Network indicators (including bash /dev/tcp and /dev/udp pseudo-devices)
