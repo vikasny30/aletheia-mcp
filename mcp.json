@@ -3,7 +3,7 @@
   "name": "aletheia-mcp",
   "displayName": "Aletheia Runtime Safety & Scope Creep Filter",
   "description": "Fast deterministic pre-execution filter for AI agent tool calls. Pattern-matches known scope-creep (S3) and prompt-injection (S2b) vectors (destructive shell/SQL, credential reads, SSRF, out-of-mandate writes) and blocks them in ~25 microseconds with no LLM in the hot path. A first-line pre-filter, not a sandbox or a formal guarantee.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "author": "Vikas Shivpuriya <vikas.ny30@gmail.com>",
   "homepage": "https://github.com/vikasny30/aletheia-mcp",
   "repository": {
